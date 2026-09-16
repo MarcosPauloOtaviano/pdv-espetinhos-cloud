@@ -1,0 +1,23 @@
+[
+  {
+    "username": "admin",
+    "email": "admin@dudair.local",
+    "password": "troque-por-uma-senha-forte",
+    "full_name": "Administrador",
+    "role": "admin"
+  },
+  {
+    "username": "caixa",
+    "email": "caixa@dudair.local",
+    "password": "troque-por-uma-senha-forte",
+    "full_name": "Caixa",
+    "role": "caixa"
+  },
+  {
+    "username": "atendente",
+    "email": "atendente@dudair.local",
+    "password": "troque-por-uma-senha-forte",
+    "full_name": "Atendente",
+    "role": "atendente"
+  }
+]

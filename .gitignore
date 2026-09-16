@@ -1,0 +1,38 @@
+# Dados locais e backups (nunca versionar)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Segredos e configuracoes privadas
+.env
+.env.*
+!.env.example
+cloud-pwa/scripts/setup-users.json
+
+# Dependencias e artefatos gerados
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+installer/Output/
+cloud-pwa/node_modules/
+cloud-pwa/dist/
+
+# Logs e temporarios
+*.log
+*.out
+*.err
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Sistema operacional e editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/

@@ -1,0 +1,26 @@
+{
+  "name": "dudair-pdv-cloud-pwa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "setup:check": "node scripts/setup-cloud.mjs --check",
+    "setup:schema": "node scripts/setup-cloud.mjs --schema",
+    "setup:users": "node scripts/setup-cloud.mjs --users",
+    "setup:all": "node scripts/setup-cloud.mjs --all"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.55.0",
+    "pg": "^8.13.1",
+    "qrcode": "^1.5.4",
+    "vite": "^7.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.6.0"
+  }
+}

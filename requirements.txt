@@ -1,0 +1,9 @@
+customtkinter==5.2.2
+Pillow==10.4.0
+qrcode==7.4.2
+pyinstaller==6.10.0
+fastapi==0.115.0
+uvicorn==0.30.6
+websockets==13.1
+requests==2.32.3
+websocket-client==1.8.0
