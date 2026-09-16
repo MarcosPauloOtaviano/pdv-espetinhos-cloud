@@ -23,7 +23,7 @@ depende do outro estar ligado.
 
 ```env
 VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
-VITE_SUPABASE_ANON_KEY=SUA_CHAVE_ANON_PUBLICA
+VITE_SUPABASE_PUBLISHABLE_KEY=SUA_CHAVE_PUBLICAVEL
 SUPABASE_SERVICE_ROLE_KEY=SUA_SERVICE_ROLE_KEY_SECRETA
 DATABASE_URL=postgresql://postgres.SEU-PROJETO:SUA-SENHA@aws-0-regiao.pooler.supabase.com:6543/postgres?sslmode=require
 ```
@@ -73,13 +73,14 @@ estatico. Na hospedagem, configure apenas:
 
 ```env
 VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
-VITE_SUPABASE_ANON_KEY=SUA_CHAVE_ANON_PUBLICA
+VITE_SUPABASE_PUBLISHABLE_KEY=SUA_CHAVE_PUBLICAVEL
 ```
 
 ## Acesso e usuarios
 
 - Usuario admin: `admin`
-- Senha admin atual: `Admin123!`
+- A senha inicial fica somente no arquivo local ignorado
+  `scripts/setup-users.json` e deve ser trocada no primeiro acesso.
 - O admin tem controle total: comandas, caixa, produtos, relatorios,
   configuracoes e usuarios.
 - Para criar ou atualizar usuarios pelo app: entre como admin, abra

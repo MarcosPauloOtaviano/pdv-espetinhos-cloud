@@ -194,7 +194,7 @@ begin
     new.id,
     coalesce(nullif(new.raw_user_meta_data->>'username', ''), split_part(new.email, '@', 1)),
     nullif(new.raw_user_meta_data->>'full_name', ''),
-    coalesce(nullif(new.raw_user_meta_data->>'role', ''), 'atendente')
+    'atendente'
   )
   on conflict (id) do nothing;
   return new;
@@ -1091,6 +1091,52 @@ for select to authenticated using (public.can_manage_money() or public.is_admin(
 drop policy if exists "audit admin readable" on public.audit_logs;
 create policy "audit admin readable" on public.audit_logs
 for select to authenticated using (public.is_admin());
+
+-- Funcoes SECURITY DEFINER nao devem herdar EXECUTE de PUBLIC. O frontend
+-- recebe acesso apenas aos helpers de autorizacao e RPCs que possuem suas
+-- proprias validacoes de perfil. Funcoes internas continuam privadas.
+do $$
+declare
+  fn regprocedure;
+begin
+  for fn in
+    select p.oid::regprocedure
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = any(array[
+        'touch_updated_at', 'handle_new_auth_user', 'current_profile',
+        'current_role', 'is_admin', 'can_manage_money', 'can_edit_orders',
+        'add_audit_log', 'recalculate_command_totals', 'create_command',
+        'add_command_item', 'update_command_item_quantity',
+        'remove_command_item', 'set_command_discount', 'update_command_info',
+        'update_item_kitchen_status', 'mark_command_pending', 'cancel_command',
+        'open_cash_session', 'add_cash_movement', 'finalize_command',
+        'get_cash_summary', 'close_cash_session', 'get_dashboard_summary'
+      ])
+  loop
+    execute format('revoke execute on function %s from public, anon', fn);
+  end loop;
+
+  for fn in
+    select p.oid::regprocedure
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = any(array[
+        'current_profile', 'current_role', 'is_admin', 'can_manage_money',
+        'can_edit_orders', 'create_command', 'add_command_item',
+        'update_command_item_quantity', 'remove_command_item',
+        'set_command_discount', 'update_command_info',
+        'update_item_kitchen_status', 'mark_command_pending', 'cancel_command',
+        'open_cash_session', 'add_cash_movement', 'finalize_command',
+        'get_cash_summary', 'close_cash_session', 'get_dashboard_summary'
+      ])
+  loop
+    execute format('grant execute on function %s to authenticated', fn);
+  end loop;
+end
+$$;
 
 insert into public.settings (key, value)
 values

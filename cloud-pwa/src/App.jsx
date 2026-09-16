@@ -319,7 +319,7 @@ function SetupScreen() {
           <li>Crie um projeto no Supabase.</li>
           <li>Execute o arquivo <code>supabase/schema.sql</code> no SQL Editor.</li>
           <li>Copie <code>.env.example</code> para <code>.env</code>.</li>
-          <li>Preencha <code>VITE_SUPABASE_URL</code> e <code>VITE_SUPABASE_ANON_KEY</code>.</li>
+          <li>Preencha <code>VITE_SUPABASE_URL</code> e <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>.</li>
         </ol>
       </div>
     </ShellFrame>

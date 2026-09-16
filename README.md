@@ -1,14 +1,15 @@
 # DUDAIR-PDV — Espetinho DU'DAIR
 
-## Versao ativa: local / SQLite
+## Modos disponiveis
 
-A versao ativa deste projeto e a aplicacao local descrita abaixo: servidor
-FastAPI, painel desktop, PWA na rede local e banco SQLite. Ela nao depende de
-Supabase nem de outro banco externo.
+- **Cloud PWA:** `cloud-pwa/` usa React, Supabase Auth, PostgreSQL e Realtime.
+  E a opcao para celular e computador compartilharem dados pela internet sem
+  depender do servidor local ligado.
+- **Local / SQLite:** a aplicacao descrita abaixo continua disponivel para
+  operacao na mesma rede, sem depender de banco externo.
 
-O diretorio `cloud-pwa/` permanece apenas como componente experimental
-separado e nao participa da execucao, dos dados ou do processo de build da
-versao local.
+Os dois componentes permanecem separados: conectar a Cloud PWA nao altera nem
+apaga o banco SQLite local.
 
 Sistema de comandas e fechamento de caixa para o Espetinho DU'DAIR, com
 **sincronizacao em tempo real entre o computador do caixa e os celulares dos

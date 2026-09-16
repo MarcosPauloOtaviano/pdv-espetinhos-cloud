@@ -28,7 +28,7 @@ async function main() {
   const env = loadEnv();
   const config = {
     supabaseUrl: env.VITE_SUPABASE_URL || env.SUPABASE_URL || "",
-    anonKey: env.VITE_SUPABASE_ANON_KEY || "",
+    publishableKey: env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY || "",
     serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY || "",
     databaseUrl: env.DATABASE_URL || env.SUPABASE_DB_URL || "",
     schemaPath: readArg("--schema-file") || defaultSchemaPath,
@@ -92,7 +92,7 @@ function readArg(name) {
 function printCheck(config) {
   console.log("DU'DAIR PDV Cloud - checagem de configuracao\n");
   console.log(`VITE_SUPABASE_URL: ${describe(config.supabaseUrl)}`);
-  console.log(`VITE_SUPABASE_ANON_KEY: ${describeSecret(config.anonKey)}`);
+  console.log(`VITE_SUPABASE_PUBLISHABLE_KEY: ${describeSecret(config.publishableKey)}`);
   console.log(`SUPABASE_SERVICE_ROLE_KEY: ${describeSecret(config.serviceRoleKey)}`);
   console.log(`DATABASE_URL/SUPABASE_DB_URL: ${describeSecret(config.databaseUrl)}`);
   console.log(`schema.sql: ${fs.existsSync(config.schemaPath) ? config.schemaPath : "nao encontrado"}`);
@@ -106,7 +106,7 @@ function printCheck(config) {
 
   const warnings = [];
   if (!hasRealValue(config.supabaseUrl)) warnings.push("preencha VITE_SUPABASE_URL");
-  if (!hasRealValue(config.anonKey)) warnings.push("preencha VITE_SUPABASE_ANON_KEY");
+  if (!hasRealValue(config.publishableKey)) warnings.push("preencha VITE_SUPABASE_PUBLISHABLE_KEY");
   if (!hasRealValue(config.databaseUrl)) warnings.push("preencha DATABASE_URL para aplicar o schema");
   if (!hasRealValue(config.serviceRoleKey)) {
     warnings.push("preencha SUPABASE_SERVICE_ROLE_KEY para criar usuarios");
