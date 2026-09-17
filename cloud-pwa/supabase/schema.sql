@@ -1145,7 +1145,7 @@ values
   ('pix_receiver_name', 'PDV ESPETINHOS'),
   ('pix_city', 'SAO PAULO'),
   ('pix_description', 'Pagamento PDV Espetinhos'),
-  ('theme', 'dark')
+  ('theme', 'light')
 on conflict (key) do nothing;
 
 insert into public.categories (name)

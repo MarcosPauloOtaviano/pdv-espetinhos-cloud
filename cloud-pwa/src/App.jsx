@@ -215,10 +215,10 @@ function App() {
       gold: root.style.getPropertyValue("--gold"),
       bg: root.style.getPropertyValue("--bg"),
     };
-    root.style.setProperty("--orange", theme.primary_color || "#e67e22");
-    root.style.setProperty("--orange-2", theme.secondary_color || "#ca6f1e");
-    root.style.setProperty("--gold", theme.accent_color || "#f1c40f");
-    root.style.setProperty("--bg", theme.background_color || "#1a1310");
+    root.style.setProperty("--orange", theme.primary_color || "#a85a2a");
+    root.style.setProperty("--orange-2", theme.secondary_color || "#6f3f2b");
+    root.style.setProperty("--gold", theme.accent_color || "#d79a3a");
+    root.style.setProperty("--bg", theme.background_color || "#f6f2ec");
     return () => {
       root.style.setProperty("--orange", previous.orange);
       root.style.setProperty("--orange-2", previous.orange2);
@@ -323,28 +323,34 @@ function App() {
 
   return (
     <ShellFrame toast={toast} online={online}>
-      <aside className="sidebar">
-        <div className="brand">🔥 {profile.establishments?.name || "PDV Espetinhos"}</div>
-        <div className="muted userline">
-          {profile.username} - {ROLE_LABELS[profile.role] || profile.role}
+      <header className="sidebar">
+        <div className="brand-lockup">
+          <span className="brand-overline">PDV ESPETINHOS</span>
+          <div className="brand">{profile.establishments?.name || "PDV Espetinhos"}</div>
         </div>
-        <NavButton view={view} id="dashboard" label="Painel" setView={setView} />
-        <NavButton view={view} id="commands" label="Comandas" setView={setView} />
-        {canOrders && <NavButton view={view} id="queue" label={`Fila (${serviceQueue.filter((item) => item.status === "pendente").length})`} setView={setView} />}
-        <NavButton view={view} id="cash" label="Caixa" setView={setView} />
-        <NavButton view={view} id="products" label="Estoque" setView={setView} />
-        {canAdmin && <NavButton view={view} id="reports" label="Relatorios" setView={setView} />}
-        {canAdmin && <NavButton view={view} id="settings" label="Admin" setView={setView} />}
-        {isSuperAdmin && <NavButton view={view} id="platform" label="Plataforma" setView={setView} />}
-        <button className="nav logout" onClick={() => supabase.auth.signOut()}>
-          Sair
-        </button>
-      </aside>
+        <nav className="nav-list" aria-label="Navegação principal">
+          <NavButton view={view} id="dashboard" label="Painel" setView={setView} />
+          <NavButton view={view} id="commands" label="Comandas" setView={setView} />
+          {canOrders && <NavButton view={view} id="queue" label={`Fila (${serviceQueue.filter((item) => item.status === "pendente").length})`} setView={setView} />}
+          <NavButton view={view} id="cash" label="Caixa" setView={setView} />
+          <NavButton view={view} id="products" label="Estoque" setView={setView} />
+          {canAdmin && <NavButton view={view} id="reports" label="Relatórios" setView={setView} />}
+          {canAdmin && <NavButton view={view} id="settings" label="Administração" setView={setView} />}
+          {isSuperAdmin && <NavButton view={view} id="platform" label="Plataforma" setView={setView} />}
+        </nav>
+        <div className="account-area">
+          <div className="userline">
+            <strong>{profile.username}</strong>
+            <span>{ROLE_LABELS[profile.role] || profile.role}</span>
+          </div>
+          <button className="logout" onClick={() => supabase.auth.signOut()}>Sair</button>
+        </div>
+      </header>
 
       <main className="main">
         <OfflineBanner online={online} />
         <button className={`sound-toggle ${soundEnabled ? "enabled" : ""}`} onClick={enableSound}>
-          {soundEnabled ? "🔊 Som ativo" : "🔈 Ativar som da fila"}
+          {soundEnabled ? "Alertas sonoros ativos" : "Ativar alertas sonoros"}
         </button>
         {view === "dashboard" && (
           <Dashboard
@@ -479,25 +485,37 @@ function LoginScreen({ show }) {
   return (
     <ShellFrame>
       <div className="login-screen">
-        <form className="login-card" onSubmit={submit}>
-          <div className="flame">🔥</div>
-          <h1>PDV Espetinhos</h1>
-          <p>Comandas e caixa sincronizados em nuvem</p>
-          <label>Usuario ou email</label>
-          <input value={login} onChange={(event) => setLogin(event.target.value)} autoComplete="username" />
-          <label>Senha</label>
-          <input
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            type="password"
-            autoComplete="current-password"
-          />
-          <button className="primary" disabled={busy}>
-            {busy ? "Entrando..." : "Entrar"}
-          </button>
-          <button type="button" className="neutral" disabled={busy} onClick={forgotPassword}>Esqueci minha senha</button>
-          <small>Para usuario simples, use nome@dudair.local no Supabase Auth.</small>
-        </form>
+        <div className="login-layout">
+          <section className="login-showcase">
+            <span className="brand-overline">PDV ESPETINHOS</span>
+            <h1>Uma operação mais clara, acolhedora e eficiente.</h1>
+            <p>Comandas, fila, estoque e caixa organizados em um só lugar.</p>
+            <div className="login-highlights" aria-label="Recursos principais">
+              <span>Dados protegidos por estabelecimento</span>
+              <span>Atualização em tempo real</span>
+              <span>Experiência simples para toda a equipe</span>
+            </div>
+          </section>
+          <form className="login-card" onSubmit={submit}>
+            <span className="eyebrow">Acesso da equipe</span>
+            <h2>Bem-vindo</h2>
+            <p>Entre para acessar o ambiente do seu estabelecimento.</p>
+            <label>Usuário ou e-mail</label>
+            <input value={login} onChange={(event) => setLogin(event.target.value)} autoComplete="username" />
+            <label>Senha</label>
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              autoComplete="current-password"
+            />
+            <button className="primary" disabled={busy}>
+              {busy ? "Entrando..." : "Entrar no sistema"}
+            </button>
+            <button type="button" className="text-action" disabled={busy} onClick={forgotPassword}>Esqueci minha senha</button>
+            <small>Use o usuário cadastrado pelo administrador ou seu e-mail de acesso.</small>
+          </form>
+        </div>
       </div>
     </ShellFrame>
   );
@@ -535,7 +553,11 @@ function ChangePasswordScreen({ show, onDone }) {
 
 function NavButton({ id, view, label, setView }) {
   return (
-    <button className={`nav ${view === id ? "active" : ""}`} onClick={() => setView(id)}>
+    <button
+      className={`nav ${view === id ? "active" : ""}`}
+      aria-current={view === id ? "page" : undefined}
+      onClick={() => setView(id)}
+    >
       {label}
     </button>
   );
@@ -555,10 +577,10 @@ function Dashboard({ data, cashSession, setView, canOrders, canMoney, establishm
     <section>
       <Header title={establishmentName || "Painel do dia"} subtitle="Resumo sincronizado entre celular e computador" />
       <div className="actions-grid">
-        {canOrders && <button className="primary big" onClick={() => setView("commands")}>Nova comanda</button>}
-        {canMoney && <button className="success big" onClick={() => setView("cash")}>Caixa</button>}
-        <button className="neutral big" onClick={() => setView("products")}>Produtos</button>
-        {canOrders && <button className="neutral big" onClick={() => setView("queue")}>Fila de atendimento</button>}
+        {canOrders && <button className="primary big" onClick={() => setView("commands")}><span>Operação</span><strong>Nova comanda</strong></button>}
+        {canMoney && <button className="success big" onClick={() => setView("cash")}><span>Financeiro</span><strong>Acessar caixa</strong></button>}
+        <button className="neutral big" onClick={() => setView("products")}><span>Catálogo</span><strong>Produtos e estoque</strong></button>
+        {canOrders && <button className="neutral big" onClick={() => setView("queue")}><span>Atendimento</span><strong>Ver fila</strong></button>}
       </div>
       <div className="metric-grid">
         <Metric label="Caixa" value={cashSession ? "ABERTO" : "FECHADO"} tone={cashSession ? "good" : "bad"} />
@@ -579,6 +601,7 @@ function Header({ title, subtitle }) {
   return (
     <header className="section-header">
       <div>
+        <span className="eyebrow">Central de operação</span>
         <h1>{title}</h1>
         {subtitle && <p>{subtitle}</p>}
       </div>
@@ -1605,10 +1628,10 @@ function SettingsPanel({ settings, profiles, establishment, establishmentId, run
         <label>Descricao Pix</label>
         <input value={values.pix_description || ""} onChange={(event) => setValue("pix_description", event.target.value)} />
         <div className="theme-grid">
-          <label>Cor principal<input type="color" value={values.primary_color || establishment?.primary_color || "#e67e22"} onChange={(event) => setValue("primary_color", event.target.value)} /></label>
-          <label>Cor secundaria<input type="color" value={values.secondary_color || establishment?.secondary_color || "#ca6f1e"} onChange={(event) => setValue("secondary_color", event.target.value)} /></label>
-          <label>Destaque<input type="color" value={values.accent_color || establishment?.accent_color || "#f1c40f"} onChange={(event) => setValue("accent_color", event.target.value)} /></label>
-          <label>Fundo<input type="color" value={values.background_color || establishment?.background_color || "#1a1310"} onChange={(event) => setValue("background_color", event.target.value)} /></label>
+          <label>Cor principal<input type="color" value={values.primary_color || establishment?.primary_color || "#a85a2a"} onChange={(event) => setValue("primary_color", event.target.value)} /></label>
+          <label>Cor secundaria<input type="color" value={values.secondary_color || establishment?.secondary_color || "#6f3f2b"} onChange={(event) => setValue("secondary_color", event.target.value)} /></label>
+          <label>Destaque<input type="color" value={values.accent_color || establishment?.accent_color || "#d79a3a"} onChange={(event) => setValue("accent_color", event.target.value)} /></label>
+          <label>Fundo<input type="color" value={values.background_color || establishment?.background_color || "#f6f2ec"} onChange={(event) => setValue("background_color", event.target.value)} /></label>
         </div>
         <button className="primary">Salvar configuracoes</button>
       </form>

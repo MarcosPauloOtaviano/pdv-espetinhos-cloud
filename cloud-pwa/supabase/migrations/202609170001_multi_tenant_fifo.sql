@@ -9,10 +9,10 @@ create table if not exists public.establishments (
   name text not null,
   active boolean not null default true,
   logo_url text,
-  primary_color text not null default '#e67e22',
-  secondary_color text not null default '#ca6f1e',
-  accent_color text not null default '#f1c40f',
-  background_color text not null default '#1a1310',
+  primary_color text not null default '#a85a2a',
+  secondary_color text not null default '#6f3f2b',
+  accent_color text not null default '#d79a3a',
+  background_color text not null default '#f6f2ec',
   contact_phone text,
   contact_email text,
   created_by uuid references auth.users(id),
@@ -879,7 +879,7 @@ cross join (values
   ('pix_receiver_name', 'ESPETINHO DO RONALDO'),
   ('pix_city', 'SAO PAULO'),
   ('pix_description', 'Pagamento Espetinho do Ronaldo'),
-  ('theme', 'dark')
+  ('theme', 'light')
 ) as v(key, value)
 where e.slug = 'espetinho-do-ronaldo'
 on conflict (establishment_id, key) do nothing;
