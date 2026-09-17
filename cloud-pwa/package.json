@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
+    "test": "node --test src/lib/*.test.js",
     "preview": "vite preview --host 0.0.0.0",
     "setup:check": "node scripts/setup-cloud.mjs --check",
     "setup:schema": "node scripts/setup-cloud.mjs --schema",

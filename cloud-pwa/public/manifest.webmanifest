@@ -1,7 +1,7 @@
 {
-  "name": "DU'DAIR PDV",
-  "short_name": "DU'DAIR PDV",
-  "description": "Sistema de comandas e caixa em nuvem do Espetinho DU'DAIR",
+  "name": "PDV Espetinhos",
+  "short_name": "Espetinhos",
+  "description": "Sistema de comandas, estoque e caixa em nuvem",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

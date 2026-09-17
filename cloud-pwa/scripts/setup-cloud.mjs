@@ -9,6 +9,7 @@ const { Client } = pg;
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultSchemaPath = path.join(rootDir, "supabase", "schema.sql");
+const migrationsDir = path.join(rootDir, "supabase", "migrations");
 const defaultUsersPath = path.join(rootDir, "scripts", "setup-users.json");
 const usersExamplePath = path.join(rootDir, "scripts", "setup-users.example.json");
 const args = process.argv.slice(2);
@@ -90,7 +91,7 @@ function readArg(name) {
 }
 
 function printCheck(config) {
-  console.log("DU'DAIR PDV Cloud - checagem de configuracao\n");
+  console.log("PDV Espetinhos Cloud - checagem de configuracao\n");
   console.log(`VITE_SUPABASE_URL: ${describe(config.supabaseUrl)}`);
   console.log(`VITE_SUPABASE_PUBLISHABLE_KEY: ${describeSecret(config.publishableKey)}`);
   console.log(`SUPABASE_SERVICE_ROLE_KEY: ${describeSecret(config.serviceRoleKey)}`);
@@ -107,16 +108,19 @@ function printCheck(config) {
   const warnings = [];
   if (!hasRealValue(config.supabaseUrl)) warnings.push("preencha VITE_SUPABASE_URL");
   if (!hasRealValue(config.publishableKey)) warnings.push("preencha VITE_SUPABASE_PUBLISHABLE_KEY");
-  if (!hasRealValue(config.databaseUrl)) warnings.push("preencha DATABASE_URL para aplicar o schema");
-  if (!hasRealValue(config.serviceRoleKey)) {
-    warnings.push("preencha SUPABASE_SERVICE_ROLE_KEY para criar usuarios");
-  }
+  const optional = [];
+  if (!hasRealValue(config.databaseUrl)) optional.push("DATABASE_URL ausente: use o SQL Editor para aplicar schema/migracoes");
+  if (!hasRealValue(config.serviceRoleKey)) optional.push("SERVICE_ROLE ausente: usuarios continuam sendo criados pela Edge Function administrativa");
 
   if (warnings.length) {
     console.log("\nPendencias:");
     for (const warning of warnings) console.log(`- ${warning}`);
   } else {
     console.log("\nConfiguracao minima encontrada.");
+  }
+  if (optional.length) {
+    console.log("\nAutomacoes locais opcionais:");
+    for (const item of optional) console.log(`- ${item}`);
   }
 }
 
@@ -135,6 +139,13 @@ async function applySchema(config) {
   try {
     await client.connect();
     await client.query(fs.readFileSync(config.schemaPath, "utf8"));
+    if (fs.existsSync(migrationsDir)) {
+      const migrations = fs.readdirSync(migrationsDir).filter((name) => name.endsWith(".sql")).sort();
+      for (const migration of migrations) {
+        console.log(`Aplicando migracao ${migration}...`);
+        await client.query(fs.readFileSync(path.join(migrationsDir, migration), "utf8"));
+      }
+    }
     await validateSchema(client);
     console.log("Schema aplicado e validado.");
   } finally {
@@ -148,6 +159,8 @@ async function validateSchema(client) {
       to_regclass('public.commands') as commands_table,
       to_regclass('public.cash_sessions') as cash_sessions_table,
       to_regclass('public.payments') as payments_table,
+      to_regclass('public.establishments') as establishments_table,
+      to_regclass('public.service_queue') as service_queue_table,
       exists (
         select 1
         from pg_proc p
@@ -160,6 +173,8 @@ async function validateSchema(client) {
     !row.commands_table ||
     !row.cash_sessions_table ||
     !row.payments_table ||
+    !row.establishments_table ||
+    !row.service_queue_table ||
     !row.finalize_command_exists
   ) {
     throw new Error("schema aplicado, mas a validacao nao encontrou tabelas/funcoes essenciais");
@@ -185,9 +200,25 @@ async function setupUsers(config) {
     },
   });
 
+  const establishmentIds = new Map();
+
   console.log(`\nCriando/atualizando ${users.length} usuario(s)...`);
   for (const user of users) {
     validateUser(user);
+    const establishmentSlug = user.establishment_slug || "du-dair";
+    let establishmentId = establishmentIds.get(establishmentSlug);
+    if (!establishmentId) {
+      const { data: establishment, error: establishmentError } = await admin
+        .from("establishments")
+        .select("id")
+        .eq("slug", establishmentSlug)
+        .single();
+      if (establishmentError) {
+        throw new Error(`estabelecimento ${establishmentSlug} nao encontrado: ${establishmentError.message}`);
+      }
+      establishmentId = establishment.id;
+      establishmentIds.set(establishmentSlug, establishmentId);
+    }
     const authUser = await upsertAuthUser(admin, user);
     const { error } = await admin.from("profiles").upsert(
       {
@@ -195,6 +226,12 @@ async function setupUsers(config) {
         username: user.username,
         full_name: user.full_name || user.username,
         role: user.role,
+        active: user.active !== false,
+        establishment_id: establishmentId,
+        platform_role:
+          user.platform_role === "super_admin" || user.username === "admin"
+            ? "super_admin"
+            : "member",
       },
       { onConflict: "id" }
     );

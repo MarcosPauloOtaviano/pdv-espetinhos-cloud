@@ -1,6 +1,6 @@
-# DU'DAIR PDV Cloud PWA
+# PDV Espetinhos Cloud PWA
 
-Nova versao em nuvem do DU'DAIR PDV. Esta pasta nao substitui o sistema local
+Plataforma em nuvem multiestabelecimento do PDV Espetinhos. Esta pasta nao substitui o sistema local
 Python/SQLite: ela cria uma PWA independente, usando Supabase/PostgreSQL como
 banco central para celular e computador.
 
@@ -11,7 +11,9 @@ banco central para celular e computador.
 - Autenticacao: Supabase Auth.
 - Sincronizacao: Supabase Realtime em tabelas de comandas, itens, pagamentos,
   caixa, produtos e configuracoes.
-- Regras criticas: funcoes SQL transacionais em `supabase/schema.sql`.
+- Regras criticas: funcoes SQL transacionais no schema e nas migracoes de `supabase/migrations/`.
+- Multiestabelecimento: isolamento por `establishment_id` com RLS, validacao por
+  trigger e estabelecimento derivado da sessao autenticada.
 
 O celular e o computador acessam o mesmo link publicado. Nenhum dispositivo
 depende do outro estar ligado.
@@ -83,11 +85,24 @@ VITE_SUPABASE_PUBLISHABLE_KEY=SUA_CHAVE_PUBLICAVEL
   `scripts/setup-users.json` e deve ser trocada no primeiro acesso.
 - O admin tem controle total: comandas, caixa, produtos, relatorios,
   configuracoes e usuarios.
+- O super admin cadastra estabelecimentos e seus administradores. O admin de
+  cada estabelecimento cria operadores que herdam automaticamente o mesmo
+  estabelecimento.
 - Para criar ou atualizar usuarios pelo app: entre como admin, abra
   `Configuracoes` > `Usuarios`, preencha usuario, nome, senha e perfil.
   Se o usuario ja existir, o formulario atualiza nome, senha, perfil e status.
 - A criacao de usuarios usa a Edge Function `admin-upsert-user`, publicada no
   Supabase com JWT obrigatorio e liberada apenas para admin.
+
+## Fila de atendimento
+
+- Pedidos digitais, chamados de garcom e solicitacoes de fechamento entram na
+  tabela `service_queue`.
+- O RPC `claim_next_service_request()` usa ordem por data/hora e bloqueio
+  concorrente, garantindo que a solicitacao pendente mais antiga seja atendida
+  primeiro dentro do estabelecimento.
+- Eventos sao transmitidos por Realtime somente para o estabelecimento da
+  sessao e geram aviso visual; o som e habilitado pelo operador no navegador.
 
 ## Regras de caixa
 

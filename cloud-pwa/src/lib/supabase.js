@@ -31,7 +31,7 @@ export function normalizeLogin(login) {
 export async function getProfile(userId) {
   const { data, error } = await supabase
     .from("profiles")
-    .select("*")
+    .select("*, establishments(*)")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw error;

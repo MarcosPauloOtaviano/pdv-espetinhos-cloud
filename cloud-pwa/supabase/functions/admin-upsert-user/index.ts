@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.55.0";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.110.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -49,20 +49,27 @@ serve(async (request) => {
     return json({ error: "Login obrigatorio." }, 401);
   }
 
+  const body = await request.json().catch(() => ({}));
+
   const { data: caller, error: callerError } = await adminClient
     .from("profiles")
-    .select("role, active")
+    .select("role, active, establishment_id, platform_role")
     .eq("id", authData.user.id)
     .maybeSingle();
   if (callerError) return json({ error: callerError.message }, 500);
-  const isAdminRecovery =
-    authData.user.email?.toLowerCase() === "admin@dudair.local" &&
-    normalizeUsername(body.username) === "admin";
-  if ((!caller?.active || caller.role !== "admin") && !isAdminRecovery) {
+  const isSuperAdmin = caller?.platform_role === "super_admin";
+  if (!caller?.active || (caller.role !== "admin" && !isSuperAdmin)) {
     return json({ error: "Somente admin pode criar ou atualizar usuarios." }, 403);
   }
 
-  const body = await request.json().catch(() => ({}));
+  const requestedEstablishmentId = String(body.establishment_id || "").trim();
+  const establishmentId = isSuperAdmin && requestedEstablishmentId
+    ? requestedEstablishmentId
+    : caller.establishment_id;
+  if (!establishmentId) {
+    return json({ error: "Estabelecimento obrigatorio para criar o usuario." }, 400);
+  }
+
   const username = normalizeUsername(body.username);
   const fullName = String(body.full_name || body.fullName || username).trim();
   const password = String(body.password || "");
@@ -79,8 +86,8 @@ serve(async (request) => {
     return json({ error: "A senha precisa ter pelo menos 6 caracteres." }, 400);
   }
 
-  const email = String(body.email || `${username}@dudair.local`).trim().toLowerCase();
-  const userMetadata = { username, full_name: fullName, role };
+  const email = String(body.email || username + "@dudair.local").trim().toLowerCase();
+  const userMetadata = { username, full_name: fullName };
   const list = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
   if (list.error) return json({ error: list.error.message }, 500);
 
@@ -110,8 +117,10 @@ serve(async (request) => {
       full_name: fullName,
       role,
       active,
+      establishment_id: establishmentId,
+      platform_role: "member",
     })
-    .select("id, username, full_name, role, active")
+    .select("id, username, full_name, role, active, establishment_id, platform_role")
     .single();
   if (profileError) return json({ error: profileError.message }, 500);
 

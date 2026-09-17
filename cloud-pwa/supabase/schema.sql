@@ -1,4 +1,4 @@
--- DU'DAIR PDV cloud schema for Supabase/PostgreSQL.
+-- PDV Espetinhos cloud schema for Supabase/PostgreSQL.
 -- Run this file once in Supabase SQL Editor.
 
 create extension if not exists pgcrypto;
@@ -1140,11 +1140,11 @@ $$;
 
 insert into public.settings (key, value)
 values
-  ('establishment_name', 'Espetinho DU''DAIR'),
+  ('establishment_name', 'PDV Espetinhos'),
   ('pix_key', ''),
-  ('pix_receiver_name', 'ESPETINHO DUDAIR'),
+  ('pix_receiver_name', 'PDV ESPETINHOS'),
   ('pix_city', 'SAO PAULO'),
-  ('pix_description', 'Pagamento Espetinho DUDAIR'),
+  ('pix_description', 'Pagamento PDV Espetinhos'),
   ('theme', 'dark')
 on conflict (key) do nothing;
 

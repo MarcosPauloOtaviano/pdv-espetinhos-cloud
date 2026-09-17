@@ -3,5 +3,6 @@ dist/
 .env
 .env.local
 scripts/setup-users.json
+scripts/*-access.local.json
 migration-csv/
 *.log

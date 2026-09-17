@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getProfile,
   isSupabaseConfigured,
@@ -18,6 +18,7 @@ import {
   todayISO,
 } from "./lib/format";
 import { buildPixPayload, pixQrDataUrl } from "./lib/pix";
+import { commandOwner, filterProducts, inventoryValue, isLowStock } from "./lib/admin";
 
 const REALTIME_TABLES = [
   "settings",
@@ -29,6 +30,7 @@ const REALTIME_TABLES = [
   "command_items",
   "payments",
   "profiles",
+  "service_queue",
 ];
 
 const EMPTY_FORM = {
@@ -49,6 +51,12 @@ const DEFAULT_USER_FORM = {
   password: "",
   role: "atendente",
   active: true,
+};
+
+const QUEUE_LABELS = {
+  pedido_digital: "Pedido",
+  chamar_garcom: "Chamar garcom",
+  solicitar_fechamento: "Solicitar fechamento",
 };
 
 function useOnlineStatus() {
@@ -95,6 +103,7 @@ function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState("dashboard");
   const [selectedCommandId, setSelectedCommandId] = useState(null);
@@ -105,14 +114,51 @@ function App() {
   const [cashSession, setCashSession] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [profiles, setProfiles] = useState([]);
+  const [serviceQueue, setServiceQueue] = useState([]);
+  const [establishments, setEstablishments] = useState([]);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const audioContextRef = useRef(null);
+  const notifiedRequestsRef = useRef(new Set());
 
   const canMoney = roleCanManageMoney(profile?.role);
   const canAdmin = roleCanManageAdmin(profile?.role);
   const canOrders = roleCanEditOrders(profile?.role);
+  const isSuperAdmin = profile?.platform_role === "super_admin";
+
+  const playQueueSound = useCallback(() => {
+    const context = audioContextRef.current;
+    if (!context || context.state !== "running") return;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, context.currentTime);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.28);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.3);
+  }, []);
+
+  async function enableSound() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      show("Este navegador nao oferece notificacao sonora.", "error");
+      return;
+    }
+    const context = audioContextRef.current || new AudioContextClass();
+    audioContextRef.current = context;
+    await context.resume();
+    setSoundEnabled(true);
+    playQueueSound();
+    show("Som da fila ativado", "success");
+  }
 
   const refreshAll = useCallback(async () => {
     if (!supabase || !session) return;
     const [
+      currentProfileData,
       settingsData,
       categoriesData,
       productsData,
@@ -120,7 +166,10 @@ function App() {
       cashData,
       dashboardData,
       profilesData,
+      queueData,
+      establishmentsData,
     ] = await Promise.all([
+      getProfile(session.user.id),
       unwrap(supabase.from("settings").select("*").order("key")),
       unwrap(supabase.from("categories").select("*").order("name")),
       unwrap(supabase.from("products").select("*, categories(name)").order("name")),
@@ -134,7 +183,17 @@ function App() {
       unwrap(supabase.from("cash_sessions").select("*").eq("status", "aberto").maybeSingle()),
       unwrap(supabase.rpc("get_dashboard_summary")),
       unwrap(supabase.from("profiles").select("*").order("username")),
+      unwrap(
+        supabase
+          .from("service_queue")
+          .select("*, commands(number, customer_name, table_ref)")
+          .in("status", ["pendente", "em_atendimento"])
+          .order("requested_at", { ascending: true })
+          .order("id", { ascending: true })
+      ),
+      unwrap(supabase.from("establishments").select("*").order("name")),
     ]);
+    setProfile(currentProfileData || null);
     setSettings(settingsData || []);
     setCategories(categoriesData || []);
     setProducts(productsData || []);
@@ -142,7 +201,31 @@ function App() {
     setCashSession(cashData || null);
     setDashboard(dashboardData || null);
     setProfiles(profilesData || []);
+    setServiceQueue(queueData || []);
+    setEstablishments(establishmentsData || []);
   }, [session]);
+
+  useEffect(() => {
+    const theme = profile?.establishments;
+    if (!theme) return undefined;
+    const root = document.documentElement;
+    const previous = {
+      orange: root.style.getPropertyValue("--orange"),
+      orange2: root.style.getPropertyValue("--orange-2"),
+      gold: root.style.getPropertyValue("--gold"),
+      bg: root.style.getPropertyValue("--bg"),
+    };
+    root.style.setProperty("--orange", theme.primary_color || "#e67e22");
+    root.style.setProperty("--orange-2", theme.secondary_color || "#ca6f1e");
+    root.style.setProperty("--gold", theme.accent_color || "#f1c40f");
+    root.style.setProperty("--bg", theme.background_color || "#1a1310");
+    return () => {
+      root.style.setProperty("--orange", previous.orange);
+      root.style.setProperty("--orange-2", previous.orange2);
+      root.style.setProperty("--gold", previous.gold);
+      root.style.setProperty("--bg", previous.bg);
+    };
+  }, [profile?.establishments]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -158,7 +241,8 @@ function App() {
       }
       setLoading(false);
     });
-    const { data: subscription } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
       setSession(nextSession);
       setProfile(nextSession?.user ? await getProfile(nextSession.user.id) : null);
       if (!nextSession) {
@@ -180,19 +264,35 @@ function App() {
 
   useEffect(() => {
     if (!session || !supabase) return undefined;
-    const channel = supabase.channel("dudair-cloud-sync");
+    if (!profile?.establishment_id) return undefined;
+    const channel = supabase.channel(`pdv-sync-${profile.establishment_id}`);
     REALTIME_TABLES.forEach((table) => {
       channel.on(
         "postgres_changes",
-        { event: "*", schema: "public", table },
-        () => refreshAll().catch((error) => show(error.message, "error"))
+        {
+          event: "*",
+          schema: "public",
+          table,
+          filter: `establishment_id=eq.${profile.establishment_id}`,
+        },
+        (payload) => {
+          if (table === "service_queue" && payload.eventType === "INSERT") {
+            const requestId = payload.new?.id;
+            if (requestId && !notifiedRequestsRef.current.has(requestId)) {
+              notifiedRequestsRef.current.add(requestId);
+              playQueueSound();
+              show("Nova solicitacao entrou na fila", "success");
+            }
+          }
+          refreshAll().catch((error) => show(error.message, "error"));
+        }
       );
     });
     channel.subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [session, refreshAll, show]);
+  }, [session, profile?.establishment_id, refreshAll, show, playQueueSound]);
 
   const selectedCommand = useMemo(
     () => commands.find((command) => command.id === selectedCommandId),
@@ -216,21 +316,26 @@ function App() {
 
   if (!isSupabaseConfigured) return <SetupScreen />;
   if (loading) return <ShellFrame><div className="empty">Carregando...</div></ShellFrame>;
+  if (passwordRecovery && session) {
+    return <ChangePasswordScreen show={show} onDone={() => setPasswordRecovery(false)} />;
+  }
   if (!session || !profile) return <LoginScreen show={show} />;
 
   return (
     <ShellFrame toast={toast} online={online}>
       <aside className="sidebar">
-        <div className="brand">🔥 DU'DAIR PDV</div>
+        <div className="brand">🔥 {profile.establishments?.name || "PDV Espetinhos"}</div>
         <div className="muted userline">
           {profile.username} - {ROLE_LABELS[profile.role] || profile.role}
         </div>
         <NavButton view={view} id="dashboard" label="Painel" setView={setView} />
         <NavButton view={view} id="commands" label="Comandas" setView={setView} />
+        {canOrders && <NavButton view={view} id="queue" label={`Fila (${serviceQueue.filter((item) => item.status === "pendente").length})`} setView={setView} />}
         <NavButton view={view} id="cash" label="Caixa" setView={setView} />
-        <NavButton view={view} id="products" label="Produtos" setView={setView} />
+        <NavButton view={view} id="products" label="Estoque" setView={setView} />
         {canAdmin && <NavButton view={view} id="reports" label="Relatorios" setView={setView} />}
-        {canAdmin && <NavButton view={view} id="settings" label="Configuracoes" setView={setView} />}
+        {canAdmin && <NavButton view={view} id="settings" label="Admin" setView={setView} />}
+        {isSuperAdmin && <NavButton view={view} id="platform" label="Plataforma" setView={setView} />}
         <button className="nav logout" onClick={() => supabase.auth.signOut()}>
           Sair
         </button>
@@ -238,6 +343,9 @@ function App() {
 
       <main className="main">
         <OfflineBanner online={online} />
+        <button className={`sound-toggle ${soundEnabled ? "enabled" : ""}`} onClick={enableSound}>
+          {soundEnabled ? "🔊 Som ativo" : "🔈 Ativar som da fila"}
+        </button>
         {view === "dashboard" && (
           <Dashboard
             data={dashboard}
@@ -245,11 +353,14 @@ function App() {
             setView={setView}
             canOrders={canOrders}
             canMoney={canMoney}
+            establishmentName={profile.establishments?.name}
+            queuePending={serviceQueue.filter((item) => item.status === "pendente").length}
           />
         )}
         {view === "commands" && !selectedCommand && (
           <CommandsList
             commands={commands}
+            profiles={profiles}
             canOrders={canOrders}
             setSelectedCommandId={setSelectedCommandId}
             run={run}
@@ -258,6 +369,7 @@ function App() {
         {view === "commands" && selectedCommand && (
           <CommandDetail
             command={selectedCommand}
+            profiles={profiles}
             products={products}
             categories={categories}
             settings={settings}
@@ -277,6 +389,9 @@ function App() {
             show={show}
           />
         )}
+        {view === "queue" && canOrders && (
+          <QueuePanel requests={serviceQueue} profiles={profiles} run={run} />
+        )}
         {view === "products" && (
           <ProductsPanel
             products={products}
@@ -285,14 +400,19 @@ function App() {
             run={run}
           />
         )}
-        {view === "reports" && canAdmin && <ReportsPanel />}
+        {view === "reports" && canAdmin && <ReportsPanel profiles={profiles} />}
         {view === "settings" && canAdmin && (
           <SettingsPanel
             settings={settings}
             profiles={profiles}
+            establishment={profile.establishments}
+            establishmentId={profile.establishment_id}
             run={run}
             show={show}
           />
+        )}
+        {view === "platform" && isSuperAdmin && (
+          <PlatformPanel establishments={establishments} run={run} />
         )}
       </main>
     </ShellFrame>
@@ -313,7 +433,7 @@ function SetupScreen() {
   return (
     <ShellFrame>
       <div className="setup">
-        <h1>DU'DAIR PDV Cloud</h1>
+        <h1>PDV Espetinhos</h1>
         <p>Configure o Supabase antes de iniciar.</p>
         <ol>
           <li>Crie um projeto no Supabase.</li>
@@ -342,12 +462,26 @@ function LoginScreen({ show }) {
     if (error) show(error.message, "error");
   }
 
+  async function forgotPassword() {
+    if (!login.includes("@")) {
+      show("Digite o email completo cadastrado para recuperar a senha.", "error");
+      return;
+    }
+    setBusy(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(login.trim(), {
+      redirectTo: window.location.origin,
+    });
+    setBusy(false);
+    if (error) show(error.message, "error");
+    else show("Se o email estiver cadastrado, o link de recuperacao foi enviado.", "success");
+  }
+
   return (
     <ShellFrame>
       <div className="login-screen">
         <form className="login-card" onSubmit={submit}>
           <div className="flame">🔥</div>
-          <h1>DU'DAIR PDV</h1>
+          <h1>PDV Espetinhos</h1>
           <p>Comandas e caixa sincronizados em nuvem</p>
           <label>Usuario ou email</label>
           <input value={login} onChange={(event) => setLogin(event.target.value)} autoComplete="username" />
@@ -361,7 +495,38 @@ function LoginScreen({ show }) {
           <button className="primary" disabled={busy}>
             {busy ? "Entrando..." : "Entrar"}
           </button>
+          <button type="button" className="neutral" disabled={busy} onClick={forgotPassword}>Esqueci minha senha</button>
           <small>Para usuario simples, use nome@dudair.local no Supabase Auth.</small>
+        </form>
+      </div>
+    </ShellFrame>
+  );
+}
+
+function ChangePasswordScreen({ show, onDone }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password });
+    setBusy(false);
+    if (error) show(error.message, "error");
+    else {
+      show("Senha alterada", "success");
+      onDone();
+    }
+  }
+
+  return (
+    <ShellFrame>
+      <div className="login-screen">
+        <form className="login-card" onSubmit={save}>
+          <h1>Nova senha</h1>
+          <p>Crie uma senha com pelo menos 8 caracteres.</p>
+          <input type="password" minLength="8" value={password} onChange={(event) => setPassword(event.target.value)} required autoFocus />
+          <button className="primary" disabled={busy}>{busy ? "Salvando..." : "Salvar nova senha"}</button>
         </form>
       </div>
     </ShellFrame>
@@ -385,14 +550,15 @@ function OfflineBanner({ online }) {
   );
 }
 
-function Dashboard({ data, cashSession, setView, canOrders, canMoney }) {
+function Dashboard({ data, cashSession, setView, canOrders, canMoney, establishmentName, queuePending }) {
   return (
     <section>
-      <Header title="Painel do dia" subtitle="Resumo sincronizado entre celular e computador" />
+      <Header title={establishmentName || "Painel do dia"} subtitle="Resumo sincronizado entre celular e computador" />
       <div className="actions-grid">
         {canOrders && <button className="primary big" onClick={() => setView("commands")}>Nova comanda</button>}
         {canMoney && <button className="success big" onClick={() => setView("cash")}>Caixa</button>}
         <button className="neutral big" onClick={() => setView("products")}>Produtos</button>
+        {canOrders && <button className="neutral big" onClick={() => setView("queue")}>Fila de atendimento</button>}
       </div>
       <div className="metric-grid">
         <Metric label="Caixa" value={cashSession ? "ABERTO" : "FECHADO"} tone={cashSession ? "good" : "bad"} />
@@ -403,6 +569,7 @@ function Dashboard({ data, cashSession, setView, canOrders, canMoney }) {
         <Metric label="Pix" value={currency(data?.total_pix)} />
         <Metric label="Cartao" value={currency(data?.total_cartao)} />
         <Metric label="Fiado hoje" value={data?.qtd_pendentes_hoje ?? 0} />
+        <Metric label="Fila pendente" value={queuePending ?? data?.fila_pendente ?? 0} tone={queuePending ? "bad" : "good"} />
       </div>
     </section>
   );
@@ -428,9 +595,14 @@ function Metric({ label, value, tone }) {
   );
 }
 
-function CommandsList({ commands, canOrders, setSelectedCommandId, run }) {
+function CommandsList({ commands, profiles, canOrders, setSelectedCommandId, run }) {
   const [customer, setCustomer] = useState("");
   const [table, setTable] = useState("");
+  const [ownerId, setOwnerId] = useState("");
+
+  const visibleCommands = ownerId
+    ? commands.filter((command) => command.created_by === ownerId)
+    : commands;
 
   async function createCommand(event) {
     event.preventDefault();
@@ -456,6 +628,17 @@ function CommandsList({ commands, canOrders, setSelectedCommandId, run }) {
   return (
     <section>
       <Header title="Comandas" subtitle="Todas as comandas abertas, atualizadas em tempo real" />
+      <div className="command-filters">
+        <label>
+          Responsavel
+          <select value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>
+            <option value="">Todas as pessoas</option>
+            {profiles.filter((item) => item.active).map((item) => (
+              <option key={item.id} value={item.id}>{item.full_name || item.username}</option>
+            ))}
+          </select>
+        </label>
+      </div>
       {canOrders && (
         <form className="quick-form" onSubmit={createCommand}>
           <input placeholder="Cliente" value={customer} onChange={(event) => setCustomer(event.target.value)} />
@@ -464,13 +647,14 @@ function CommandsList({ commands, canOrders, setSelectedCommandId, run }) {
         </form>
       )}
       <div className="cards-grid">
-        {commands.map((command) => (
+        {visibleCommands.map((command) => (
           <button className="command-card" key={command.id} onClick={() => setSelectedCommandId(command.id)}>
             <div className="row">
               <strong>Comanda #{String(command.number).padStart(4, "0")}</strong>
               <StatusBadge status={command.status} />
             </div>
             <p>{command.customer_name || "Cliente nao informado"} {command.table_ref ? `- ${command.table_ref}` : ""}</p>
+            <small className="owner-line">Aberta por {commandOwner(command, profiles)}</small>
             <div className="row">
               <span>{command.command_items?.length || 0} item(ns)</span>
               <strong className="total">{currency(command.total)}</strong>
@@ -478,7 +662,7 @@ function CommandsList({ commands, canOrders, setSelectedCommandId, run }) {
           </button>
         ))}
       </div>
-      {!commands.length && <div className="empty">Nenhuma comanda aberta.</div>}
+      {!visibleCommands.length && <div className="empty">Nenhuma comanda aberta para este filtro.</div>}
     </section>
   );
 }
@@ -487,7 +671,7 @@ function StatusBadge({ status }) {
   return <span className={`status ${status}`}>{COMMAND_STATUS[status] || status}</span>;
 }
 
-function CommandDetail({ command, products, categories, settings, canMoney, canOrders, busy, run, close }) {
+function CommandDetail({ command, profiles, products, categories, settings, canMoney, canOrders, busy, run, close }) {
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [customer, setCustomer] = useState(command.customer_name || "");
@@ -583,6 +767,18 @@ function CommandDetail({ command, products, categories, settings, canMoney, canO
     close();
   }
 
+  async function sendOrderToQueue() {
+    await run(
+      () => unwrap(supabase.rpc("enqueue_service_request", {
+        p_command_id: command.id,
+        p_request_type: "pedido_digital",
+        p_payload: { source: "pdv", command_version: command.version },
+        p_idempotency_key: `pdv-${command.id}-${command.version}`,
+      })),
+      "Pedido enviado para a fila"
+    );
+  }
+
   return (
     <section>
       <div className="detail-top">
@@ -590,6 +786,7 @@ function CommandDetail({ command, products, categories, settings, canMoney, canO
         <h1>Comanda #{String(command.number).padStart(4, "0")}</h1>
         <StatusBadge status={command.status} />
       </div>
+      <p className="detail-owner">Aberta por <strong>{commandOwner(command, profiles)}</strong> em {dateTime(command.opened_at)}</p>
       <div className="detail-layout">
         <div className="panel">
           <h2>Itens</h2>
@@ -628,6 +825,11 @@ function CommandDetail({ command, products, categories, settings, canMoney, canO
           </div>
 
           <div className="button-row">
+            {editable && (
+              <button className="primary" disabled={busy || !command.command_items?.length} onClick={sendOrderToQueue}>
+                Enviar pedido para fila
+              </button>
+            )}
             {["aberto", "aguardando_pagamento", "fiado"].includes(command.status) && (
               <button className="danger" onClick={cancelCommand}>Cancelar</button>
             )}
@@ -691,7 +893,7 @@ function PaymentModal({ command, settings, initialMode, onClose, onPaid, run }) 
       try {
         const payload = buildPixPayload({
           pixKey: settingsValue(settings, "pix_key"),
-          merchantName: settingsValue(settings, "pix_receiver_name", "ESPETINHO DUDAIR"),
+          merchantName: settingsValue(settings, "pix_receiver_name", "PDV ESPETINHOS"),
           merchantCity: settingsValue(settings, "pix_city", "SAO PAULO"),
           description: settingsValue(settings, "pix_description", ""),
           amount: total,
@@ -929,9 +1131,80 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
   );
 }
 
+function QueuePanel({ requests, profiles, run }) {
+  const pending = requests.filter((item) => item.status === "pendente");
+  const inProgress = requests.filter((item) => item.status === "em_atendimento");
+
+  async function claimNext() {
+    await run(
+      () => unwrap(supabase.rpc("claim_next_service_request")),
+      "Proxima solicitacao iniciada"
+    );
+  }
+
+  async function complete(requestId) {
+    await run(
+      () => unwrap(supabase.rpc("complete_service_request", { p_request_id: requestId })),
+      "Solicitacao concluida"
+    );
+  }
+
+  function requestCard(item, index, active = false) {
+    const command = item.commands || {};
+    const claimedBy = profiles.find((profile) => profile.id === item.claimed_by);
+    return (
+      <div className={`queue-card ${active ? "active" : ""}`} key={item.id}>
+        <div className="queue-position">{active ? "Em atendimento" : `#${index + 1} da fila`}</div>
+        <div>
+          <strong>{QUEUE_LABELS[item.request_type] || item.request_type}</strong>
+          <p>Comanda #{String(command.number || 0).padStart(4, "0")} · {command.customer_name || command.table_ref || "Cliente"}</p>
+          <small>Solicitado em {dateTime(item.requested_at)}</small>
+          {claimedBy && <small>Atendido por {claimedBy.full_name || claimedBy.username}</small>}
+        </div>
+        {active && <button className="success" onClick={() => complete(item.id)}>Concluir</button>}
+      </div>
+    );
+  }
+
+  return (
+    <section>
+      <Header title="Fila de atendimento" subtitle="Ordem FIFO: quem pediu primeiro aparece e e atendido primeiro" />
+      <div className="metric-grid inventory-metrics">
+        <Metric label="Aguardando" value={pending.length} tone={pending.length ? "bad" : "good"} />
+        <Metric label="Em atendimento" value={inProgress.length} />
+      </div>
+      {pending.length > 0 && (
+        <button className="primary queue-next" onClick={claimNext}>Atender proxima solicitacao</button>
+      )}
+      {inProgress.length > 0 && (
+        <div className="queue-section">
+          <h2>Em atendimento</h2>
+          {inProgress.map((item, index) => requestCard(item, index, true))}
+        </div>
+      )}
+      <div className="queue-section">
+        <h2>Aguardando em ordem de chegada</h2>
+        {pending.map((item, index) => requestCard(item, index))}
+        {!pending.length && <div className="empty">Nenhuma solicitacao aguardando.</div>}
+      </div>
+    </section>
+  );
+}
+
 function ProductsPanel({ products, categories, canAdmin, run }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
+  const [categoryName, setCategoryName] = useState("");
+
+  const visibleProducts = filterProducts(products, {
+    search,
+    categoryId: categoryFilter,
+    showInactive,
+  });
+  const lowStock = products.filter((product) => product.active && isLowStock(product));
 
   function setField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -976,52 +1249,107 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
     setForm(EMPTY_FORM);
   }
 
+  async function createCategory(event) {
+    event.preventDefault();
+    const name = categoryName.trim();
+    if (!name) return;
+    const result = await run(
+      () => unwrap(supabase.from("categories").insert({ name })),
+      "Categoria criada"
+    );
+    if (result !== null) setCategoryName("");
+  }
+
+  async function toggleActive(product) {
+    await run(
+      () => unwrap(supabase.from("products").update({ active: !product.active }).eq("id", product.id)),
+      product.active ? "Produto desativado" : "Produto reativado"
+    );
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+  }
+
   return (
     <section>
-      <Header title="Produtos" subtitle="Catalogo e estoque sincronizados" />
+      <Header title="Estoque e produtos" subtitle="Catalogo, custos e quantidades sincronizados" />
+      <div className="metric-grid inventory-metrics">
+        <Metric label="Produtos ativos" value={products.filter((product) => product.active).length} />
+        <Metric label="Estoque baixo" value={lowStock.length} tone={lowStock.length ? "bad" : "good"} />
+        <Metric label="Valor em estoque" value={currency(inventoryValue(products))} />
+        <Metric label="Categorias" value={categories.length} />
+      </div>
       {canAdmin && (
-        <form className="panel product-form" onSubmit={submit}>
-          <h2>{editing ? "Editar produto" : "Novo produto"}</h2>
-          <div className="form-grid">
-            <input placeholder="Nome" value={form.name} onChange={(event) => setField("name", event.target.value)} required />
-            <select value={form.category_id} onChange={(event) => setField("category_id", event.target.value)}>
-              <option value="">Sem categoria</option>
-              {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-            </select>
-            <input placeholder="Preco" value={form.price} onChange={(event) => setField("price", event.target.value)} required />
-            <input placeholder="Custo" value={form.cost} onChange={(event) => setField("cost", event.target.value)} />
-            <input placeholder="Estoque" value={form.stock_quantity} onChange={(event) => setField("stock_quantity", event.target.value)} />
-            <input placeholder="Alerta baixo estoque" value={form.low_stock_threshold} onChange={(event) => setField("low_stock_threshold", event.target.value)} />
-          </div>
-          <label className="check">
-            <input type="checkbox" checked={form.track_stock} onChange={(event) => setField("track_stock", event.target.checked)} />
-            Controlar estoque
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={form.active} onChange={(event) => setField("active", event.target.checked)} />
-            Produto ativo
-          </label>
-          <button className="primary">{editing ? "Salvar alteracoes" : "Criar produto"}</button>
-        </form>
+        <>
+          <form className="panel category-form" onSubmit={createCategory}>
+            <h2>Categorias</h2>
+            <div className="quick-form">
+              <input placeholder="Nova categoria" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} />
+              <button className="neutral">Criar categoria</button>
+            </div>
+          </form>
+          <form className="panel product-form" onSubmit={submit}>
+            <div className="row">
+              <h2>{editing ? "Editar produto" : "Novo produto"}</h2>
+              {editing && <button type="button" className="neutral small" onClick={cancelEdit}>Cancelar edicao</button>}
+            </div>
+            <div className="form-grid">
+              <div><label>Nome</label><input placeholder="Nome" value={form.name} onChange={(event) => setField("name", event.target.value)} required /></div>
+              <div><label>Categoria</label><select value={form.category_id} onChange={(event) => setField("category_id", event.target.value)}>
+                <option value="">Sem categoria</option>
+                {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select></div>
+              <div><label>Preco de venda</label><input placeholder="0,00" value={form.price} onChange={(event) => setField("price", event.target.value)} required /></div>
+              <div><label>Custo</label><input placeholder="0,00" value={form.cost} onChange={(event) => setField("cost", event.target.value)} /></div>
+              <div><label>Quantidade em estoque</label><input placeholder="0" value={form.stock_quantity} onChange={(event) => setField("stock_quantity", event.target.value)} /></div>
+              <div><label>Alerta de estoque baixo</label><input placeholder="5" value={form.low_stock_threshold} onChange={(event) => setField("low_stock_threshold", event.target.value)} /></div>
+            </div>
+            <label>Observacoes</label>
+            <textarea placeholder="Observacoes internas do produto" value={form.notes} onChange={(event) => setField("notes", event.target.value)} />
+            <div className="button-row checks-row">
+              <label className="check"><input type="checkbox" checked={form.track_stock} onChange={(event) => setField("track_stock", event.target.checked)} />Controlar estoque</label>
+              <label className="check"><input type="checkbox" checked={form.active} onChange={(event) => setField("active", event.target.checked)} />Produto ativo</label>
+            </div>
+            <button className="primary">{editing ? "Salvar alteracoes" : "Criar produto"}</button>
+          </form>
+        </>
       )}
+      <div className="panel inventory-filters">
+        <div className="form-grid">
+          <div><label>Buscar</label><input placeholder="Nome, categoria ou observacao" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+          <div><label>Categoria</label><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+            <option value="">Todas</option>
+            {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          </select></div>
+          <label className="checkline"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />Mostrar inativos</label>
+        </div>
+      </div>
       <div className="table-list">
-        {products.map((product) => (
-          <div className="table-row" key={product.id}>
+        {visibleProducts.map((product) => (
+          <div className={`table-row inventory-row ${isLowStock(product) ? "low-stock" : ""}`} key={product.id}>
             <div>
               <strong>{product.name}</strong>
-              <small>{product.categories?.name || "Sem categoria"} {product.active ? "" : "- inativo"}</small>
+              <small>{product.categories?.name || "Sem categoria"} {!product.active && "- inativo"}</small>
+              {product.notes && <small>{product.notes}</small>}
             </div>
-            <span>{currency(product.price)}</span>
-            <span>{product.track_stock ? `Estoque ${Number(product.stock_quantity).toLocaleString("pt-BR")}` : "Sem estoque"}</span>
-            {canAdmin && <button className="neutral small" onClick={() => edit(product)}>Editar</button>}
+            <div><small>Venda / custo</small><span>{currency(product.price)} / {currency(product.cost)}</span></div>
+            <div><small>Estoque</small><strong>{product.track_stock ? Number(product.stock_quantity).toLocaleString("pt-BR") : "Nao controlado"}</strong></div>
+            {isLowStock(product) && <span className="stock-alert">Estoque baixo</span>}
+            {canAdmin && <div className="button-row inventory-actions">
+              <button className="neutral small" onClick={() => edit(product)}>Editar</button>
+              <button className={product.active ? "danger small" : "success small"} onClick={() => toggleActive(product)}>{product.active ? "Desativar" : "Reativar"}</button>
+            </div>}
           </div>
         ))}
       </div>
+      {!visibleProducts.length && <div className="empty">Nenhum produto encontrado.</div>}
     </section>
   );
 }
 
-function ReportsPanel() {
+function ReportsPanel({ profiles }) {
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
   const [rows, setRows] = useState([]);
@@ -1079,6 +1407,7 @@ function ReportsPanel() {
             <strong>#{String(row.number).padStart(4, "0")}</strong>
             <span>{COMMAND_STATUS[row.status]}</span>
             <span>{row.customer_name || "-"}</span>
+            <span>{commandOwner(row, profiles)}</span>
             <span>{currency(row.total)}</span>
             <span>{dateTime(row.opened_at)}</span>
           </div>
@@ -1088,7 +1417,107 @@ function ReportsPanel() {
   );
 }
 
-function SettingsPanel({ settings, profiles, run, show }) {
+function PlatformPanel({ establishments, run }) {
+  const [name, setName] = useState("");
+  const [adminForm, setAdminForm] = useState({
+    establishmentId: "",
+    username: "",
+    fullName: "",
+    email: "",
+    password: "",
+  });
+
+  function slugify(value) {
+    return value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+  }
+
+  async function createEstablishment(event) {
+    event.preventDefault();
+    const cleanName = name.trim();
+    if (!cleanName) return;
+    const created = await run(
+      () => unwrap(supabase.from("establishments").insert({ name: cleanName, slug: slugify(cleanName) })),
+      "Estabelecimento criado"
+    );
+    if (created !== null) setName("");
+  }
+
+  async function toggleEstablishment(item) {
+    if (item.slug === "du-dair" && item.active) {
+      window.alert("O estabelecimento em uso nao pode ser desativado por esta tela.");
+      return;
+    }
+    await run(
+      () => unwrap(supabase.from("establishments").update({ active: !item.active }).eq("id", item.id)),
+      item.active ? "Estabelecimento desativado" : "Estabelecimento ativado"
+    );
+  }
+
+  async function createEstablishmentAdmin(event) {
+    event.preventDefault();
+    const saved = await run(async () => {
+      const { data, error } = await supabase.functions.invoke("admin-upsert-user", {
+        body: {
+          establishment_id: adminForm.establishmentId,
+          username: adminForm.username.trim(),
+          full_name: adminForm.fullName.trim(),
+          email: adminForm.email.trim() || undefined,
+          password: adminForm.password,
+          role: "admin",
+          active: true,
+        },
+      });
+      if (error) throw error;
+      return data;
+    }, "Administrador do estabelecimento salvo");
+    if (saved !== null) {
+      setAdminForm({ establishmentId: "", username: "", fullName: "", email: "", password: "" });
+    }
+  }
+
+  return (
+    <section>
+      <Header title="Plataforma" subtitle="Todos usam a mesma aplicacao, com dados isolados por estabelecimento" />
+      <form className="panel quick-form" onSubmit={createEstablishment}>
+        <div><label>Novo estabelecimento</label><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome do estabelecimento" required /></div>
+        <button className="primary">Criar estabelecimento</button>
+      </form>
+      <form className="panel" onSubmit={createEstablishmentAdmin}>
+        <h2>Administrador do estabelecimento</h2>
+        <div className="form-grid">
+          <div><label>Estabelecimento</label><select value={adminForm.establishmentId} onChange={(event) => setAdminForm((current) => ({ ...current, establishmentId: event.target.value }))} required>
+            <option value="">Selecione</option>
+            {establishments.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select></div>
+          <div><label>Usuario</label><input value={adminForm.username} onChange={(event) => setAdminForm((current) => ({ ...current, username: event.target.value }))} required /></div>
+          <div><label>Nome</label><input value={adminForm.fullName} onChange={(event) => setAdminForm((current) => ({ ...current, fullName: event.target.value }))} /></div>
+          <div><label>Email real</label><input type="email" value={adminForm.email} onChange={(event) => setAdminForm((current) => ({ ...current, email: event.target.value }))} placeholder="Para recuperar a senha" /></div>
+          <div><label>Senha inicial</label><input type="password" minLength="6" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} required /></div>
+        </div>
+        <button className="primary">Criar ou atualizar administrador</button>
+      </form>
+      <div className="table-list">
+        {establishments.map((item) => (
+          <div className="table-row" key={item.id}>
+            <div><strong>{item.name}</strong><small>{item.slug}</small></div>
+            <span className={`status ${item.active ? "aberto" : "cancelada"}`}>{item.active ? "Ativo" : "Inativo"}</span>
+            <button className={item.active ? "danger small" : "success small"} onClick={() => toggleEstablishment(item)}>
+              {item.active ? "Desativar" : "Ativar"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SettingsPanel({ settings, profiles, establishment, establishmentId, run, show }) {
   const [values, setValues] = useState({});
   const [userForm, setUserForm] = useState(DEFAULT_USER_FORM);
 
@@ -1103,7 +1532,24 @@ function SettingsPanel({ settings, profiles, run, show }) {
   async function saveSettings(event) {
     event.preventDefault();
     const updates = Object.entries(values).map(([key, value]) =>
-      unwrap(supabase.from("settings").upsert({ key, value }))
+      unwrap(supabase.from("settings").upsert(
+        { establishment_id: establishmentId, key, value },
+        { onConflict: "establishment_id,key" }
+      ))
+    );
+    updates.push(
+      unwrap(
+        supabase
+          .from("establishments")
+          .update({
+            name: values.establishment_name || establishment?.name,
+            primary_color: values.primary_color || establishment?.primary_color,
+            secondary_color: values.secondary_color || establishment?.secondary_color,
+            accent_color: values.accent_color || establishment?.accent_color,
+            background_color: values.background_color || establishment?.background_color,
+          })
+          .eq("id", establishmentId)
+      )
     );
     await run(async () => Promise.all(updates), "Configuracoes salvas");
   }
@@ -1132,7 +1578,7 @@ function SettingsPanel({ settings, profiles, run, show }) {
       active: userForm.active,
     };
 
-    await run(async () => {
+    const saved = await run(async () => {
       const { data, error } = await supabase.functions.invoke("admin-upsert-user", {
         body: payload,
       });
@@ -1140,12 +1586,12 @@ function SettingsPanel({ settings, profiles, run, show }) {
       return data;
     }, "Usuario salvo");
 
-    setUserForm(DEFAULT_USER_FORM);
+    if (saved !== null) setUserForm(DEFAULT_USER_FORM);
   }
 
   return (
     <section>
-      <Header title="Configuracoes" subtitle="Estabelecimento, Pix e usuarios" />
+      <Header title="Administracao" subtitle="Estabelecimento, Pix e usuarios da equipe" />
       <form className="panel" onSubmit={saveSettings}>
         <h2>Estabelecimento e Pix</h2>
         <label>Nome do estabelecimento</label>
@@ -1158,6 +1604,12 @@ function SettingsPanel({ settings, profiles, run, show }) {
         <input value={values.pix_city || ""} onChange={(event) => setValue("pix_city", event.target.value)} />
         <label>Descricao Pix</label>
         <input value={values.pix_description || ""} onChange={(event) => setValue("pix_description", event.target.value)} />
+        <div className="theme-grid">
+          <label>Cor principal<input type="color" value={values.primary_color || establishment?.primary_color || "#e67e22"} onChange={(event) => setValue("primary_color", event.target.value)} /></label>
+          <label>Cor secundaria<input type="color" value={values.secondary_color || establishment?.secondary_color || "#ca6f1e"} onChange={(event) => setValue("secondary_color", event.target.value)} /></label>
+          <label>Destaque<input type="color" value={values.accent_color || establishment?.accent_color || "#f1c40f"} onChange={(event) => setValue("accent_color", event.target.value)} /></label>
+          <label>Fundo<input type="color" value={values.background_color || establishment?.background_color || "#1a1310"} onChange={(event) => setValue("background_color", event.target.value)} /></label>
+        </div>
         <button className="primary">Salvar configuracoes</button>
       </form>
 

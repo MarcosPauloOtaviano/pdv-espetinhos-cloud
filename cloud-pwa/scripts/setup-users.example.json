@@ -4,20 +4,24 @@
     "email": "admin@dudair.local",
     "password": "troque-por-uma-senha-forte",
     "full_name": "Administrador",
-    "role": "admin"
+    "role": "admin",
+    "platform_role": "super_admin",
+    "establishment_slug": "du-dair"
   },
   {
     "username": "caixa",
     "email": "caixa@dudair.local",
     "password": "troque-por-uma-senha-forte",
     "full_name": "Caixa",
-    "role": "caixa"
+    "role": "caixa",
+    "establishment_slug": "du-dair"
   },
   {
     "username": "atendente",
     "email": "atendente@dudair.local",
     "password": "troque-por-uma-senha-forte",
     "full_name": "Atendente",
-    "role": "atendente"
+    "role": "atendente",
+    "establishment_slug": "du-dair"
   }
 ]
