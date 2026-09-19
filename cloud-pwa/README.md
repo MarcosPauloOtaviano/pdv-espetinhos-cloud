@@ -111,6 +111,10 @@ entram na mesma comanda e geram uma solicitação na fila FIFO em uma transaçã
   em `audit_logs`.
 - A equipe de cozinha também pode acessar a fila. O aceite da próxima solicitação
   é o evento que protege o pedido do cliente contra novas alterações.
+- A fila oferece busca por mesa/comanda, filtro por tipo e aceite específico
+  direto no cartão. A mesma ação aparece como atalho dentro da comanda, para
+  o atendente não precisar trocar de tela. As cores são semânticas: azul para
+  novo pedido, laranja para chamar atendente e vinho para fechamento.
 
 - Mostrar o QR novamente conserva o acesso; gerar outro invalida o anterior.
 - Revogação, expiração (24 horas), cancelamento e pagamento impedem o acesso.

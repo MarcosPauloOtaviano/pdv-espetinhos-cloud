@@ -61,6 +61,36 @@ const QUEUE_LABELS = {
   solicitar_fechamento: "Solicitar fechamento",
 };
 
+const QUEUE_META = {
+  pedido_digital: {
+    label: "Novo pedido",
+    shortLabel: "Pedido",
+    tone: "order",
+    icon: "🍽",
+  },
+  chamar_garcom: {
+    label: "Chamar atendente",
+    shortLabel: "Atendente",
+    tone: "waiter",
+    icon: "🔔",
+  },
+  solicitar_fechamento: {
+    label: "Fechar comanda",
+    shortLabel: "Fechamento",
+    tone: "close",
+    icon: "✓",
+  },
+};
+
+function queueMeta(type) {
+  return QUEUE_META[type] || {
+    label: QUEUE_LABELS[type] || type,
+    shortLabel: QUEUE_LABELS[type] || type,
+    tone: "other",
+    icon: "•",
+  };
+}
+
 const KITCHEN_STATUS = {
   pendente: "Aguardando aceite",
   preparando: "Em preparo",
@@ -135,13 +165,14 @@ function App() {
   const canQueue = roleCanManageQueue(profile?.role);
   const isSuperAdmin = profile?.platform_role === "super_admin";
 
-  const playQueueSound = useCallback(() => {
+  const playQueueSound = useCallback((requestType = "pedido_digital") => {
     const context = audioContextRef.current;
     if (!context || context.state !== "running") return;
     const oscillator = context.createOscillator();
     const gain = context.createGain();
     oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, context.currentTime);
+    const frequency = requestType === "chamar_garcom" ? 660 : requestType === "solicitar_fechamento" ? 520 : 880;
+    oscillator.frequency.setValueAtTime(frequency, context.currentTime);
     gain.gain.setValueAtTime(0.0001, context.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.28);
@@ -164,6 +195,24 @@ function App() {
     playQueueSound();
     show("Som da fila ativado", "success");
   }
+
+  const notifyQueueRequest = useCallback(async (request) => {
+    const meta = queueMeta(request.request_type);
+    let place = "";
+    if (request.command_id) {
+      const { data: command } = await supabase
+        .from("commands")
+        .select("number, customer_name, table_ref")
+        .eq("id", request.command_id)
+        .maybeSingle();
+      if (command) {
+        const table = command.table_ref ? `Mesa ${command.table_ref}` : `Comanda #${String(command.number || 0).padStart(4, "0")}`;
+        place = `${table}${command.customer_name ? ` · ${command.customer_name}` : ""}`;
+      }
+    }
+    playQueueSound(request.request_type);
+    show(`${meta.icon} ${place ? `${place} · ` : ""}${meta.label}`, `queue-${meta.tone}`);
+  }, [playQueueSound, show]);
 
   const refreshAll = useCallback(async () => {
     if (!supabase || !session) return;
@@ -285,13 +334,12 @@ function App() {
           table,
           filter: `establishment_id=eq.${profile.establishment_id}`,
         },
-        (payload) => {
+        async (payload) => {
           if (table === "service_queue" && payload.eventType === "INSERT") {
             const requestId = payload.new?.id;
             if (requestId && !notifiedRequestsRef.current.has(requestId)) {
               notifiedRequestsRef.current.add(requestId);
-              playQueueSound();
-              show("Nova solicitacao entrou na fila", "success");
+              await notifyQueueRequest(payload.new);
             }
           }
           refreshAll().catch((error) => show(error.message, "error"));
@@ -302,7 +350,7 @@ function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [session, profile?.establishment_id, refreshAll, show, playQueueSound]);
+  }, [session, profile?.establishment_id, refreshAll, show, notifyQueueRequest]);
 
   const selectedCommand = useMemo(
     () => commands.find((command) => command.id === selectedCommandId),
@@ -392,6 +440,8 @@ function App() {
             canMoney={canMoney}
             canOrders={canOrders}
             canAdmin={canAdmin}
+            canQueue={canQueue}
+            queueRequests={serviceQueue.filter((item) => item.command_id === selectedCommand.id)}
             busy={busy}
             run={run}
             close={() => setSelectedCommandId(null)}
@@ -710,7 +760,7 @@ function StatusBadge({ status }) {
   return <span className={`status ${status}`}>{COMMAND_STATUS[status] || status}</span>;
 }
 
-function CommandDetail({ command, profiles, products, categories, settings, canMoney, canOrders, canAdmin, busy, run, close }) {
+function CommandDetail({ command, profiles, products, categories, settings, canMoney, canOrders, canAdmin, canQueue, queueRequests, busy, run, close }) {
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [customer, setCustomer] = useState(command.customer_name || "");
@@ -796,6 +846,20 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
     );
   }
 
+  async function claimRequest(requestId) {
+    await run(
+      () => unwrap(supabase.rpc("claim_service_request", { p_request_id: requestId })),
+      "Solicitação aceita e enviada para preparo"
+    );
+  }
+
+  async function completeRequest(requestId) {
+    await run(
+      () => unwrap(supabase.rpc("complete_service_request", { p_request_id: requestId })),
+      "Solicitação concluída"
+    );
+  }
+
   return (
     <section>
       <div className="detail-top">
@@ -805,6 +869,38 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
       </div>
       <p className="detail-owner">Aberta por <strong>{commandOwner(command, profiles)}</strong> em {dateTime(command.opened_at)}</p>
       {editable && <CustomerAccess commandId={command.id} />}
+      {canQueue && queueRequests.length > 0 && (
+        <section className="panel command-queue-shortcut" aria-label="Solicitações desta comanda">
+          <div className="row">
+            <div>
+              <span className="eyebrow">Atalho da fila</span>
+              <h2>Solicitações desta comanda</h2>
+            </div>
+            <span className="pill">{queueRequests.length} ativa(s)</span>
+          </div>
+          <p className="muted">Aceite diretamente aqui quando estiver atendendo esta mesa. A fila geral continua respeitando a ordem de chegada.</p>
+          <div className="command-queue-list">
+            {queueRequests.map((request) => {
+              const meta = queueMeta(request.request_type);
+              const active = request.status === "em_atendimento";
+              return (
+                <div className={`command-queue-row command-queue-${meta.tone}`} key={request.id}>
+                  <span className="queue-type-badge"><span aria-hidden="true">{meta.icon}</span>{meta.shortLabel}</span>
+                  <div>
+                    <strong>{active ? "Em atendimento" : "Aguardando aceite"}</strong>
+                    <small>{dateTime(request.requested_at)}</small>
+                  </div>
+                  {active ? (
+                    <button className="success small" onClick={() => completeRequest(request.id)}>Concluir</button>
+                  ) : (
+                    <button className="primary small" onClick={() => claimRequest(request.id)}>Aceitar agora</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
       <div className="detail-layout">
         <div className="panel">
           <h2>Itens</h2>
@@ -1200,13 +1296,38 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
 }
 
 function QueuePanel({ requests, profiles, run }) {
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
   const pending = requests.filter((item) => item.status === "pendente");
   const inProgress = requests.filter((item) => item.status === "em_atendimento");
+
+  const matches = (item) => {
+    if (filter !== "all" && item.request_type !== filter) return false;
+    const command = item.commands || {};
+    const haystack = [
+      command.table_ref,
+      command.customer_name,
+      command.number,
+      item.request_type,
+      QUEUE_LABELS[item.request_type],
+    ].filter(Boolean).join(" ").toLocaleLowerCase();
+    return !search.trim() || haystack.includes(search.trim().toLocaleLowerCase());
+  };
+
+  const visiblePending = pending.filter(matches);
+  const visibleInProgress = inProgress.filter(matches);
 
   async function claimNext() {
     await run(
       () => unwrap(supabase.rpc("claim_next_service_request")),
-      "Proxima solicitacao iniciada"
+      "Próxima solicitação aceita e enviada para preparo"
+    );
+  }
+
+  async function claimRequest(requestId) {
+    await run(
+      () => unwrap(supabase.rpc("claim_service_request", { p_request_id: requestId })),
+      "Solicitação aceita e enviada para preparo"
     );
   }
 
@@ -1220,18 +1341,21 @@ function QueuePanel({ requests, profiles, run }) {
   function requestCard(item, index, active = false) {
     const command = item.commands || {};
     const claimedBy = profiles.find((profile) => profile.id === item.claimed_by);
+    const meta = queueMeta(item.request_type);
     return (
-      <div className={`queue-card ${active ? "active" : ""}`} key={item.id}>
-        <div className="queue-position">{active ? "Aceito / em atendimento" : `#${index + 1} da fila`}</div>
+      <div className={`queue-card queue-card-${meta.tone} ${active ? "active" : ""}`} key={item.id}>
+        <div className="queue-position">{active ? "Em atendimento" : `#${index + 1} da fila`}</div>
         <div>
-          <strong>{QUEUE_LABELS[item.request_type] || item.request_type}</strong>
+          <span className="queue-type-badge"><span aria-hidden="true">{meta.icon}</span>{meta.label}</span>
           <p>Comanda #{String(command.number || 0).padStart(4, "0")} · {command.customer_name || command.table_ref || "Cliente"}</p>
           <small>Solicitado em {dateTime(item.requested_at)}</small>
           {item.payload?.source === 'customer' && <small>Solicitação pelo celular do cliente</small>}
           {item.payload?.items?.map((line) => <p key={line.id}>{line.quantity} × {line.name}{line.notes ? ` · ${line.notes}` : ''}</p>)}
           {claimedBy && <small>Atendido por {claimedBy.full_name || claimedBy.username}</small>}
         </div>
-        {active && <button className="success" onClick={() => complete(item.id)}>Concluir</button>}
+        <div className="queue-card-actions">
+          {active ? <button className="success small" onClick={() => complete(item.id)}>Concluir</button> : <button className="primary small" onClick={() => claimRequest(item.id)}>Atender esta</button>}
+        </div>
       </div>
     );
   }
@@ -1243,19 +1367,39 @@ function QueuePanel({ requests, profiles, run }) {
         <Metric label="Aguardando" value={pending.length} tone={pending.length ? "bad" : "good"} />
         <Metric label="Em atendimento" value={inProgress.length} />
       </div>
+      <div className="panel queue-controls">
+        <div className="row queue-controls-heading">
+          <div><span className="eyebrow">Visão rápida</span><h2>Encontre qualquer mesa</h2></div>
+          <span className="queue-count">{requests.length} ativa(s)</span>
+        </div>
+        <div className="form-grid">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar mesa, comanda ou cliente" aria-label="Buscar na fila" />
+          <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrar tipo de solicitação">
+            <option value="all">Todos os tipos</option>
+            <option value="pedido_digital">🍽 Novo pedido</option>
+            <option value="chamar_garcom">🔔 Chamar atendente</option>
+            <option value="solicitar_fechamento">✓ Fechar comanda</option>
+          </select>
+        </div>
+        <div className="queue-legend" aria-label="Legenda das cores da fila">
+          <span><i className="queue-legend-dot order" />Pedidos</span>
+          <span><i className="queue-legend-dot waiter" />Atendente</span>
+          <span><i className="queue-legend-dot close" />Fechamento</span>
+        </div>
+      </div>
       {pending.length > 0 && (
         <button className="primary queue-next" onClick={claimNext}>Aceitar próxima solicitação</button>
       )}
-      {inProgress.length > 0 && (
+      {visibleInProgress.length > 0 && (
         <div className="queue-section">
           <h2>Em atendimento</h2>
-          {inProgress.map((item, index) => requestCard(item, index, true))}
+          {visibleInProgress.map((item, index) => requestCard(item, index, true))}
         </div>
       )}
       <div className="queue-section">
         <h2>Aguardando em ordem de chegada</h2>
-        {pending.map((item, index) => requestCard(item, index))}
-        {!pending.length && <div className="empty">Nenhuma solicitacao aguardando.</div>}
+        {visiblePending.map((item) => requestCard(item, pending.indexOf(item)))}
+        {!visiblePending.length && <div className="empty">Nenhuma solicitação corresponde ao filtro.</div>}
       </div>
     </section>
   );
