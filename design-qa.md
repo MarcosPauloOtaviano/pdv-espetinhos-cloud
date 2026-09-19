@@ -45,5 +45,14 @@ Nenhum problema P0, P1 ou P2 foi encontrado nas telas e estados validados.
 ## Observações de baixa prioridade
 
 - As texturas de couro e mármore foram traduzidas em cor, profundidade e acabamento visual leve, sem imagens pesadas, para preservar desempenho e legibilidade.
-- A rota pública da comanda do cliente não faz parte do frontend Cloud PWA atualmente exposto; os tokens de tema estão preparados para serem reaproveitados quando essa tela for incorporada.
-- Os breakpoints de 375, 390 e 414 px estão cobertos por regras responsivas, mas a inspeção visual desta rodada foi feita no viewport de desktop disponível.
+- A validação inicial do painel administrativo foi feita no viewport de desktop disponível.
+
+## Validação adicional — comanda digital (2026-09-18)
+
+- Implementada a rota pública `/#/comanda/<credencial>`, com a mesma paleta clara, nome do estabelecimento, total, pedidos e cardápio.
+- Captura visual da tela do cliente em 390 × 844 px: leitura, espaçamento e botões adequados ao celular.
+- Verificados os tamanhos 375, 390, 414, 768 e 1280 px; nenhuma rolagem horizontal foi detectada.
+- Testada a geração do QR Code no PDV e a abertura do link sem login de cliente.
+- Seleção de produto atualiza o valor do carrinho; chamada de atendente aparece na fila da equipe sem recarregar a página.
+- O cancelamento da comanda vazia encerra o acesso e remove a solicitação pendente da fila; essa comanda não aparece no relatório.
+- Pedidos, preços, isolamento e ciclo de vida da credencial também foram verificados no banco em transação revertida; consulte `cloud-pwa/supabase/tests/customer_access.sql`.

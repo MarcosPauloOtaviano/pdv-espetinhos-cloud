@@ -19,6 +19,7 @@ import {
 } from "./lib/format";
 import { buildPixPayload, pixQrDataUrl } from "./lib/pix";
 import { commandOwner, filterProducts, inventoryValue, isLowStock } from "./lib/admin";
+import CustomerAccess from './CustomerAccess';
 
 const REALTIME_TABLES = [
   "settings",
@@ -590,7 +591,6 @@ function Dashboard({ data, cashSession, setView, canOrders, canMoney, establishm
         <Metric label="Dinheiro" value={currency(data?.total_dinheiro)} />
         <Metric label="Pix" value={currency(data?.total_pix)} />
         <Metric label="Cartao" value={currency(data?.total_cartao)} />
-        <Metric label="Fiado hoje" value={data?.qtd_pendentes_hoje ?? 0} />
         <Metric label="Fila pendente" value={queuePending ?? data?.fila_pendente ?? 0} tone={queuePending ? "bad" : "good"} />
       </div>
     </section>
@@ -780,14 +780,8 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
 
   async function cancelCommand() {
     if (!window.confirm("Cancelar esta comanda?")) return;
-    await run(() => unwrap(supabase.rpc("cancel_command", { p_command_id: command.id })), "Comanda cancelada");
-    close();
-  }
-
-  async function pendingCommand() {
-    if (!window.confirm("Marcar esta comanda como fiado/pendente?")) return;
-    await run(() => unwrap(supabase.rpc("mark_command_pending", { p_command_id: command.id })), "Comanda marcada como fiado");
-    close();
+    const result = await run(() => unwrap(supabase.rpc("cancel_command", { p_command_id: command.id })), "Comanda cancelada");
+    if (result !== null) close();
   }
 
   async function sendOrderToQueue() {
@@ -810,6 +804,7 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
         <StatusBadge status={command.status} />
       </div>
       <p className="detail-owner">Aberta por <strong>{commandOwner(command, profiles)}</strong> em {dateTime(command.opened_at)}</p>
+      {editable && <CustomerAccess commandId={command.id} />}
       <div className="detail-layout">
         <div className="panel">
           <h2>Itens</h2>
@@ -856,7 +851,6 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
             {["aberto", "aguardando_pagamento", "fiado"].includes(command.status) && (
               <button className="danger" onClick={cancelCommand}>Cancelar</button>
             )}
-            {editable && <button className="gold" onClick={pendingCommand}>Fiado</button>}
             {canMoney && ["aberto", "aguardando_pagamento", "fiado"].includes(command.status) && (
               <button className="success" disabled={busy || !command.command_items?.length} onClick={() => setPaymentMode("dinheiro")}>
                 Finalizar
@@ -1182,6 +1176,8 @@ function QueuePanel({ requests, profiles, run }) {
           <strong>{QUEUE_LABELS[item.request_type] || item.request_type}</strong>
           <p>Comanda #{String(command.number || 0).padStart(4, "0")} · {command.customer_name || command.table_ref || "Cliente"}</p>
           <small>Solicitado em {dateTime(item.requested_at)}</small>
+          {item.payload?.source === 'customer' && <small>Solicitação pelo celular do cliente</small>}
+          {item.payload?.items?.map((line) => <p key={line.id}>{line.quantity} × {line.name}{line.notes ? ` · ${line.notes}` : ''}</p>)}
           {claimedBy && <small>Atendido por {claimedBy.full_name || claimedBy.username}</small>}
         </div>
         {active && <button className="success" onClick={() => complete(item.id)}>Concluir</button>}
@@ -1389,7 +1385,8 @@ function ReportsPanel({ profiles }) {
           .lte("business_date", to)
           .order("opened_at", { ascending: false })
       );
-      setRows(data || []);
+      // Keep cancellations with items for operational history; discard empty drafts from this report.
+      setRows((data || []).filter((row) => row.status !== "cancelada" || row.command_items?.length > 0));
     } finally {
       setLoading(false);
     }
@@ -1418,7 +1415,6 @@ function ReportsPanel({ profiles }) {
         <Metric label="Total vendido" value={currency(total)} />
         <Metric label="Comandas pagas" value={paid.length} />
         <Metric label="Canceladas" value={rows.filter((row) => row.status === "cancelada").length} />
-        <Metric label="Fiado" value={rows.filter((row) => row.status === "fiado").length} />
         <Metric label="Dinheiro" value={currency(byPayment.dinheiro)} />
         <Metric label="Pix" value={currency(byPayment.pix)} />
         <Metric label="Debito" value={currency(byPayment.debito)} />

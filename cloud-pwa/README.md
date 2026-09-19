@@ -94,6 +94,39 @@ VITE_SUPABASE_PUBLISHABLE_KEY=SUA_CHAVE_PUBLICAVEL
 - A criacao de usuarios usa a Edge Function `admin-upsert-user`, publicada no
   Supabase com JWT obrigatorio e liberada apenas para admin.
 
+## Comanda digital do cliente
+
+Na comanda aberta, a equipe encontra **Acesso do cliente → Gerar acesso do cliente**.
+O QR Code abre `/#/comanda/<credencial>` na mesma URL da aplicação, sem login.
+O cliente acompanha itens/total, monta novos pedidos com observações, chama o
+atendente e solicita fechamento. Os pedidos usam os preços cadastrados no banco,
+entram na mesma comanda e geram uma solicitação na fila FIFO em uma transação.
+
+- Mostrar o QR novamente conserva o acesso; gerar outro invalida o anterior.
+- Revogação, expiração (24 horas), cancelamento e pagamento impedem o acesso.
+- Só a equipe autorizada do estabelecimento gerencia credenciais.
+- A tabela de credenciais fica no schema privado, com RLS e sem leitura pelos clientes.
+- A API pública recebe somente a credencial e valida o estabelecimento da comanda;
+  não aceita preços ou identificação de estabelecimento enviados pelo cliente.
+- Reenvio usa identificador único para evitar duplicação de itens e eventos na fila.
+- A tela pública usa um cliente anônimo independente da sessão da equipe.
+- A equipe recebe eventos pelo Realtime existente; a tela do cliente atualiza
+  automaticamente a cada cinco segundos (30 segundos em segundo plano).
+- No link temporário, o servidor e o túnel precisam permanecer ativos. Uma URL
+  permanente é necessária para uso diário com QR Codes persistentes.
+
+Aplicar `supabase/migrations/202609180001_digital_customer_access.sql` uma vez após
+as migrações anteriores. A CLI não estava instalada nesta sessão; a migração foi
+registrada no repositório e aplicada no SQL Editor autenticado.
+`supabase/tests/customer_access.sql` verifica acesso anônimo, isolamento, preços,
+estoque, repetição de envio, fila, renovação, revogação, expiração e encerramento,
+com dados temporários revertidos ao final. O teste usa a conta Ronaldo e dois
+estabelecimentos já configurados, sem gravar credenciais.
+
+Fiado foi removido das ações da PWA e novas alterações para esse status são
+bloqueadas pelo banco. O histórico oculta cancelamentos sem itens, inclusive
+na contagem de canceladas; os registros técnicos continuam disponíveis para auditoria.
+
 ## Fila de atendimento
 
 - Pedidos digitais, chamados de garcom e solicitacoes de fechamento entram na
