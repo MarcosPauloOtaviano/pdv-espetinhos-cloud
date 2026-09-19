@@ -4,7 +4,7 @@ do $$
 declare
   staff uuid; other_tenant uuid; tenant uuid; c public.commands;
   product uuid; foreign_product uuid; token1 text; token2 text; result jsonb;
-  request_id uuid := gen_random_uuid(); failed boolean;
+  request_id uuid := gen_random_uuid(); queue_id bigint; cancelled_queue_id bigint; item_id uuid; failed boolean;
 begin
   select id, establishment_id into staff, tenant from public.profiles where username = 'ronaldo' and active;
   assert staff is not null, 'Test requires the configured Ronaldo admin';
@@ -50,17 +50,64 @@ begin
   result := public.customer_request(token1, request_id, 'pedido_digital', jsonb_build_array(
     jsonb_build_object('product_id', product, 'quantity', 2, 'price', 0.01, 'notes', 'Sem cebola')));
   assert (result->>'duplicate')::boolean = false;
+  queue_id := (result->>'request_id')::bigint;
   result := public.customer_request(token1, request_id, 'pedido_digital', jsonb_build_array(jsonb_build_object('product_id', product, 'quantity', 2)));
   assert (result->>'duplicate')::boolean, 'Retry must not duplicate order';
   result := public.customer_command(token1);
   assert (result->'command'->>'total')::numeric = 15, 'Prices come from server';
   assert jsonb_array_length(result->'items') = 1, 'Retry adds no items';
   assert jsonb_array_length(result->'requests') = 1, 'Retry adds no queue event';
+
+  result := public.customer_change_request(token1, queue_id, 'edit', jsonb_build_array(
+    jsonb_build_object('product_id', product, 'quantity', 3, 'notes', 'Sem cebola')));
+  assert (result->>'edited')::boolean, 'Customer can edit an unaccepted request';
+  assert (public.customer_command(token1)->'command'->>'total')::numeric = 22.50, 'Edited request recalculates the server total';
+  assert (public.customer_command(token1)->'requests'->0->>'can_change')::boolean, 'Pending request remains editable';
+
+  -- The production flow rate-limits repeated requests for five seconds. Move
+  -- the fixture clock-equivalent request outside that window before testing a
+  -- separate cancellation.
+  execute 'reset role';
+  update public.service_queue set requested_at = now() - interval '6 seconds' where id = queue_id;
+  perform set_config('request.jwt.claims', '{}', true);
+  execute 'set local role anon';
+  result := public.customer_request(token1, gen_random_uuid(), 'pedido_digital', jsonb_build_array(
+    jsonb_build_object('product_id', product, 'quantity', 1)));
+  cancelled_queue_id := (result->>'request_id')::bigint;
+  result := public.customer_change_request(token1, cancelled_queue_id, 'cancel', '[]');
+  assert (result->>'cancelled')::boolean, 'Customer can cancel an unaccepted request';
+  assert (public.customer_command(token1)->'command'->>'total')::numeric = 22.50, 'Cancelled request is removed from the total';
+  assert (select status = 'cancelado' from public.service_queue where id = cancelled_queue_id), 'Cancelled request leaves an audit-safe queue record';
+
+  execute 'reset role';
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', staff, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  perform public.claim_next_service_request();
+  select id into item_id from public.command_items where source_request_id = queue_id;
+  assert (select kitchen_status = 'preparando' from public.command_items where id = item_id), 'Queue acceptance starts preparation';
+  execute 'reset role';
+  perform set_config('request.jwt.claims', '{}', true);
+  execute 'set local role anon';
+  failed := false;
+  begin perform public.customer_change_request(token1, queue_id, 'cancel', '[]'); exception when raise_exception then failed := true; end;
+  assert failed, 'Customer cannot change an accepted request';
+  execute 'reset role';
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', staff, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  failed := false;
+  begin perform public.admin_adjust_command_item(item_id, product, 3, ''); exception when raise_exception then failed := true; end;
+  assert failed, 'Administrator justification is mandatory';
+  perform public.admin_adjust_command_item(item_id, product, 3, 'Confirmação do pedido após conferência na mesa');
+  assert exists(select 1 from public.audit_logs where entity_id = c.id and action = 'admin_item_adjusted'), 'Administrator correction is audited';
+  execute 'reset role';
+  perform set_config('request.jwt.claims', '{}', true);
+  execute 'set local role anon';
+
   perform public.customer_request(token1, gen_random_uuid(), 'chamar_garcom', '[]');
   result := public.customer_request(token1, gen_random_uuid(), 'chamar_garcom', '[]');
   assert (result->>'duplicate')::boolean, 'Waiter call deduplicated';
   execute 'reset role';
-  assert (select count(*) from public.service_queue where command_id = c.id and establishment_id = tenant) = 2;
+  assert (select count(*) from public.service_queue where command_id = c.id and establishment_id = tenant) = 3;
   assert (select stock_quantity from public.products where id = product) = 10, 'Stock is not deducted twice';
   assert not has_table_privilege('anon', 'private.command_access', 'select');
   assert not has_function_privilege('anon', 'private.resolve_customer_command(text)', 'execute');
@@ -74,7 +121,7 @@ begin
   failed := false;
   begin perform public.customer_command(token1); exception when raise_exception then failed := true; end;
   assert failed, 'Rotated token rejected';
-  assert (public.customer_command(token2)->'command'->>'total')::numeric = 15, 'Rotation preserves items and total';
+  assert (public.customer_command(token2)->'command'->>'total')::numeric = 22.50, 'Rotation preserves items and total';
   perform public.customer_request(token2, gen_random_uuid(), 'solicitar_fechamento', '[]');
   assert public.customer_command(token2)->'command'->>'status' = 'aguardando_pagamento';
   execute 'reset role';
@@ -112,5 +159,5 @@ begin
   begin perform public.customer_command(token2); exception when raise_exception then failed := true; end;
   assert failed, 'Cancel invalidates access';
 end $$;
-select 'PASS: access, isolation, prices, idempotency, stock, queue, rotation, revocation, expiration, closure and fiado' as result;
+select 'PASS: access, isolation, prices, pending edits/cancellation, accepted-order protection, admin audit, stock, queue, rotation, revocation, expiration, closure and fiado' as result;
 rollback;

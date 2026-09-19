@@ -102,6 +102,16 @@ O cliente acompanha itens/total, monta novos pedidos com observações, chama o
 atendente e solicita fechamento. Os pedidos usam os preços cadastrados no banco,
 entram na mesma comanda e geram uma solicitação na fila FIFO em uma transação.
 
+- Enquanto um pedido digital estiver **pendente**, o cliente pode alterá-lo ou
+  cancelá-lo por completo. Ao aceitar a solicitação na fila, os itens passam para
+  **Em preparo** e o link do cliente não pode mais removê-los nem alterá-los.
+- Linhas já existentes não são removidas pelo cliente, mesmo que o QR Code seja
+  compartilhado. Uma correção posterior é exclusiva do administrador: ele escolhe
+  o item/quantidade (ou remoção) e informa uma justificativa obrigatória, que fica
+  em `audit_logs`.
+- A equipe de cozinha também pode acessar a fila. O aceite da próxima solicitação
+  é o evento que protege o pedido do cliente contra novas alterações.
+
 - Mostrar o QR novamente conserva o acesso; gerar outro invalida o anterior.
 - Revogação, expiração (24 horas), cancelamento e pagamento impedem o acesso.
 - Só a equipe autorizada do estabelecimento gerencia credenciais.
@@ -115,11 +125,13 @@ entram na mesma comanda e geram uma solicitação na fila FIFO em uma transaçã
 - No link temporário, o servidor e o túnel precisam permanecer ativos. Uma URL
   permanente é necessária para uso diário com QR Codes persistentes.
 
-Aplicar `supabase/migrations/202609180001_digital_customer_access.sql` uma vez após
-as migrações anteriores. A CLI não estava instalada nesta sessão; a migração foi
-registrada no repositório e aplicada no SQL Editor autenticado.
+Aplicar `supabase/migrations/202609180001_digital_customer_access.sql` e depois
+`supabase/migrations/202609190001_customer_order_controls.sql`, uma vez cada, após
+as migrações anteriores. A CLI não estava instalada nesta sessão; as migrações são
+mantidas no repositório e podem ser aplicadas no SQL Editor autenticado.
 `supabase/tests/customer_access.sql` verifica acesso anônimo, isolamento, preços,
-estoque, repetição de envio, fila, renovação, revogação, expiração e encerramento,
+estoque, repetição de envio, edição/cancelamento pendente, bloqueio após aceite,
+auditoria administrativa, fila, renovação, revogação, expiração e encerramento,
 com dados temporários revertidos ao final. O teste usa a conta Ronaldo e dois
 estabelecimentos já configurados, sem gravar credenciais.
 

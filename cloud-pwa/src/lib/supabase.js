@@ -49,3 +49,7 @@ export function roleCanManageAdmin(role) {
 export function roleCanEditOrders(role) {
   return role === "admin" || role === "caixa" || role === "atendente";
 }
+
+export function roleCanManageQueue(role) {
+  return role === "admin" || role === "caixa" || role === "atendente" || role === "cozinha";
+}

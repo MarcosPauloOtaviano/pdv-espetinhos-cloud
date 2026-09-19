@@ -4,6 +4,7 @@ import {
   isSupabaseConfigured,
   normalizeLogin,
   roleCanEditOrders,
+  roleCanManageQueue,
   roleCanManageAdmin,
   roleCanManageMoney,
   supabase,
@@ -58,6 +59,13 @@ const QUEUE_LABELS = {
   pedido_digital: "Pedido",
   chamar_garcom: "Chamar garcom",
   solicitar_fechamento: "Solicitar fechamento",
+};
+
+const KITCHEN_STATUS = {
+  pendente: "Aguardando aceite",
+  preparando: "Em preparo",
+  pronto: "Pronto",
+  entregue: "Entregue",
 };
 
 function useOnlineStatus() {
@@ -124,6 +132,7 @@ function App() {
   const canMoney = roleCanManageMoney(profile?.role);
   const canAdmin = roleCanManageAdmin(profile?.role);
   const canOrders = roleCanEditOrders(profile?.role);
+  const canQueue = roleCanManageQueue(profile?.role);
   const isSuperAdmin = profile?.platform_role === "super_admin";
 
   const playQueueSound = useCallback(() => {
@@ -332,7 +341,7 @@ function App() {
         <nav className="nav-list" aria-label="Navegação principal">
           <NavButton view={view} id="dashboard" label="Painel" setView={setView} />
           <NavButton view={view} id="commands" label="Comandas" setView={setView} />
-          {canOrders && <NavButton view={view} id="queue" label={`Fila (${serviceQueue.filter((item) => item.status === "pendente").length})`} setView={setView} />}
+          {canQueue && <NavButton view={view} id="queue" label={`Fila (${serviceQueue.filter((item) => item.status === "pendente").length})`} setView={setView} />}
           <NavButton view={view} id="cash" label="Caixa" setView={setView} />
           <NavButton view={view} id="products" label="Estoque" setView={setView} />
           {canAdmin && <NavButton view={view} id="reports" label="Relatórios" setView={setView} />}
@@ -382,6 +391,7 @@ function App() {
             settings={settings}
             canMoney={canMoney}
             canOrders={canOrders}
+            canAdmin={canAdmin}
             busy={busy}
             run={run}
             close={() => setSelectedCommandId(null)}
@@ -396,7 +406,7 @@ function App() {
             show={show}
           />
         )}
-        {view === "queue" && canOrders && (
+        {view === "queue" && canQueue && (
           <QueuePanel requests={serviceQueue} profiles={profiles} run={run} />
         )}
         {view === "products" && (
@@ -700,7 +710,7 @@ function StatusBadge({ status }) {
   return <span className={`status ${status}`}>{COMMAND_STATUS[status] || status}</span>;
 }
 
-function CommandDetail({ command, profiles, products, categories, settings, canMoney, canOrders, busy, run, close }) {
+function CommandDetail({ command, profiles, products, categories, settings, canMoney, canOrders, canAdmin, busy, run, close }) {
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [customer, setCustomer] = useState(command.customer_name || "");
@@ -708,6 +718,7 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
   const [notes, setNotes] = useState(command.notes || "");
   const [discount, setDiscount] = useState(String(command.discount || "0"));
   const [paymentMode, setPaymentMode] = useState(null);
+  const [adjustingItem, setAdjustingItem] = useState(null);
 
   useEffect(() => {
     setCustomer(command.customer_name || "");
@@ -751,23 +762,6 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
           })
         ),
       "Item adicionado"
-    );
-  }
-
-  async function changeQuantity(item, quantity) {
-    if (quantity <= 0) {
-      await run(() => unwrap(supabase.rpc("remove_command_item", { p_item_id: item.id })), "Item removido");
-      return;
-    }
-    await run(
-      () =>
-        unwrap(
-          supabase.rpc("update_command_item_quantity", {
-            p_item_id: item.id,
-            p_quantity: quantity,
-          })
-        ),
-      "Quantidade atualizada"
     );
   }
 
@@ -826,12 +820,11 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
               <div className="item" key={item.id}>
                 <div>
                   <strong>{item.product_name}</strong>
-                  <small>{currency(item.unit_price)} / un</small>
+                  <small>{currency(item.unit_price)} / un · {KITCHEN_STATUS[item.kitchen_status] || item.kitchen_status}</small>
                 </div>
-                <div className="qty">
-                  <button disabled={!editable} onClick={() => changeQuantity(item, Number(item.quantity) - 1)}>-</button>
-                  <span>{Number(item.quantity).toLocaleString("pt-BR")}</span>
-                  <button disabled={!editable} onClick={() => changeQuantity(item, Number(item.quantity) + 1)}>+</button>
+                <div className="item-controls">
+                  <span>{Number(item.quantity).toLocaleString("pt-BR")} un</span>
+                  {canAdmin && editable && <button className="neutral small" onClick={() => setAdjustingItem(item)}>Ajustar</button>}
                 </div>
                 <strong>{currency(item.subtotal)}</strong>
               </div>
@@ -887,6 +880,14 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
           </div>
         </div>
       </div>
+      {adjustingItem && (
+        <ItemAdjustmentModal
+          item={adjustingItem}
+          products={products}
+          run={run}
+          onClose={() => setAdjustingItem(null)}
+        />
+      )}
       {paymentMode && (
         <PaymentModal
           command={command}
@@ -898,6 +899,50 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
         />
       )}
     </section>
+  );
+}
+
+function ItemAdjustmentModal({ item, products, run, onClose }) {
+  const [productId, setProductId] = useState(item.product_id || "");
+  const [quantity, setQuantity] = useState(String(item.quantity || 0));
+  const [reason, setReason] = useState("");
+
+  async function save() {
+    const parsedQuantity = Number(String(quantity).replace(",", "."));
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity < 0) return;
+    if (reason.trim().length < 5) return;
+    const result = await run(
+      () => unwrap(supabase.rpc("admin_adjust_command_item", {
+        p_item_id: item.id,
+        p_product_id: productId || null,
+        p_quantity: parsedQuantity,
+        p_reason: reason.trim(),
+      })),
+      parsedQuantity === 0 ? "Item removido com justificativa" : "Ajuste registrado com justificativa"
+    );
+    if (result) onClose();
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="adjust-item-title">
+      <div className="modal item-adjustment-modal">
+        <div className="row"><h2 id="adjust-item-title">Ajustar item</h2><button className="neutral small" onClick={onClose}>Fechar</button></div>
+        <p>Somente administradores podem corrigir um pedido. A justificativa fica registrada no histórico.</p>
+        <label>Produto</label>
+        <select value={productId} onChange={(event) => setProductId(event.target.value)}>
+          {products.filter((product) => product.active || product.id === item.product_id).map((product) => (
+            <option key={product.id} value={product.id}>{product.name}</option>
+          ))}
+        </select>
+        <label>Quantidade <small>Use 0 para remover o item.</small></label>
+        <input type="number" min="0" max="999" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} />
+        <label>Justificativa obrigatória</label>
+        <textarea maxLength="500" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Ex.: item lançado errado pelo atendente" />
+        <button className={Number(quantity) === 0 ? "danger" : "primary"} disabled={reason.trim().length < 5} onClick={save}>
+          {Number(quantity) === 0 ? "Remover e registrar" : "Salvar ajuste"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1177,7 +1222,7 @@ function QueuePanel({ requests, profiles, run }) {
     const claimedBy = profiles.find((profile) => profile.id === item.claimed_by);
     return (
       <div className={`queue-card ${active ? "active" : ""}`} key={item.id}>
-        <div className="queue-position">{active ? "Em atendimento" : `#${index + 1} da fila`}</div>
+        <div className="queue-position">{active ? "Aceito / em atendimento" : `#${index + 1} da fila`}</div>
         <div>
           <strong>{QUEUE_LABELS[item.request_type] || item.request_type}</strong>
           <p>Comanda #{String(command.number || 0).padStart(4, "0")} · {command.customer_name || command.table_ref || "Cliente"}</p>
@@ -1193,13 +1238,13 @@ function QueuePanel({ requests, profiles, run }) {
 
   return (
     <section>
-      <Header title="Fila de atendimento" subtitle="Ordem FIFO: quem pediu primeiro aparece e e atendido primeiro" />
+      <Header title="Fila de atendimento" subtitle="Ordem FIFO: ao aceitar um pedido digital, ele entra em preparo e não pode mais ser alterado pelo cliente" />
       <div className="metric-grid inventory-metrics">
         <Metric label="Aguardando" value={pending.length} tone={pending.length ? "bad" : "good"} />
         <Metric label="Em atendimento" value={inProgress.length} />
       </div>
       {pending.length > 0 && (
-        <button className="primary queue-next" onClick={claimNext}>Atender proxima solicitacao</button>
+        <button className="primary queue-next" onClick={claimNext}>Aceitar próxima solicitação</button>
       )}
       {inProgress.length > 0 && (
         <div className="queue-section">

@@ -1540,6 +1540,46 @@ small {
 .customer-order-line:last-child { border-bottom: 0; }
 .customer-order-line small, .customer-cart small { display: block; color: var(--muted); margin-top: 6px; }
 .customer-order-line > strong { white-space: nowrap; }
+.customer-change-requests p,
+.customer-request-editor > p,
+.item-adjustment-modal > p {
+  color: var(--muted);
+}
+.customer-change-request {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+.customer-change-request small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.customer-request-editor h2 { margin: 4px 0 0; }
+.item-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.item-controls > span {
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.item-adjustment-modal {
+  display: grid;
+  gap: 10px;
+  width: min(500px, calc(100vw - 32px));
+}
+.item-adjustment-modal .row { margin-bottom: 2px; }
+.item-adjustment-modal h2 { margin: 0; }
+.item-adjustment-modal label { display: grid; gap: 4px; font-weight: 700; }
+.item-adjustment-modal label small { color: var(--muted); font-weight: 500; }
+.item-adjustment-modal textarea { min-height: 90px; resize: vertical; }
 .customer-menu { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
 .customer-product { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-2); }
 .customer-product > div:first-child { flex: 1; min-width: 100px; }

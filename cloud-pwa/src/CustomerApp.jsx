@@ -18,6 +18,8 @@ export default function CustomerApp({ token }) {
   const [cart, setCart] = useState({});
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
+  const [editingRequestId, setEditingRequestId] = useState(null);
+  const [editCart, setEditCart] = useState({});
   const [refreshing, setRefreshing] = useState(true);
   const sending = useRef(false);
   const pending = useRef(null);
@@ -44,14 +46,72 @@ export default function CustomerApp({ token }) {
     return () => { stopped = true; clearTimeout(timer); };
   }, [refresh]);
 
+  useEffect(() => {
+    if (!editingRequestId || !data) return;
+    const request = data.requests?.find((item) => item.id === editingRequestId);
+    if (!request?.can_change) {
+      setEditingRequestId(null);
+      setEditCart({});
+    }
+  }, [data, editingRequestId]);
+
   const products = data?.products || [];
   const categories = [...new Set(products.map((p) => p.category || 'Outros'))];
   const selected = Object.entries(cart).filter(([, item]) => item.quantity > 0);
   const cartTotal = selected.reduce((sum, [id, item]) => sum + Number(products.find((p) => p.id === id)?.price || 0) * item.quantity, 0);
+  const editSelected = Object.entries(editCart).filter(([, item]) => item.quantity > 0);
+  const editCartTotal = editSelected.reduce((sum, [id, item]) => sum + Number(products.find((p) => p.id === id)?.price || 0) * item.quantity, 0);
   const editable = data?.command?.status === 'aberto' && !fatal;
 
   function changeItem(id, quantity) {
     setCart((current) => ({ ...current, [id]: { ...current[id], quantity: Math.min(50, Math.max(0, quantity)) } }));
+  }
+
+  function changeEditItem(id, quantity) {
+    setEditCart((current) => ({ ...current, [id]: { ...current[id], quantity: Math.min(50, Math.max(0, quantity)) } }));
+  }
+
+  function startEditingRequest(request) {
+    const items = Object.fromEntries((request.items || []).map((item) => [item.product_id, {
+      quantity: Number(item.quantity || 0),
+      notes: item.notes || '',
+    }]));
+    setEditingRequestId(request.id);
+    setEditCart(items);
+    setMessage('');
+  }
+
+  async function changeRequest(action) {
+    const request = data?.requests?.find((item) => item.id === editingRequestId);
+    if (!request || !request.can_change) {
+      setError('Este pedido já foi aceito e não pode mais ser alterado.');
+      return;
+    }
+    if (action === 'edit' && !editSelected.length) {
+      setError('Mantenha ao menos um item ou use Cancelar pedido.');
+      return;
+    }
+    if (action === 'cancel' && !window.confirm('Cancelar este pedido antes de ele ser aceito pela cozinha?')) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const { error: err } = await customerClient.rpc('customer_change_request', {
+        p_token: token,
+        p_queue_id: request.id,
+        p_action: action,
+        p_items: action === 'edit'
+          ? editSelected.map(([id, item]) => ({ product_id: id, quantity: item.quantity, notes: item.notes || '' }))
+          : [],
+      });
+      if (err) throw err;
+      setEditingRequestId(null);
+      setEditCart({});
+      setMessage(action === 'cancel' ? 'Pedido cancelado antes do preparo.' : 'Pedido atualizado e mantido na fila.');
+      await refresh();
+    } catch (err) {
+      setError(err.code === 'P0001' ? err.message : 'Não foi possível alterar o pedido. Atualize a página e tente novamente.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submit(type) {
@@ -87,6 +147,7 @@ export default function CustomerApp({ token }) {
 
   const c = data.command;
   const queued = data.requests.filter((r) => ['pendente', 'em_atendimento'].includes(r.status));
+  const changeableRequests = data.requests.filter((r) => r.type === 'pedido_digital' && r.can_change);
   return <main className="customer-shell" style={{ '--orange': data.establishment.primary_color || '#a85a2a', backgroundColor: data.establishment.background_color || '#f6f2ec' }}>
     <header className="customer-header"><span className="eyebrow">Bem-vindo à sua mesa</span>
       <h1>{data.establishment.name}</h1><p>Comanda #{String(c.number).padStart(4, '0')}{c.table_ref ? ` · Mesa ${c.table_ref}` : ''}{c.customer_name ? ` · ${c.customer_name}` : ''}</p>
@@ -107,6 +168,29 @@ export default function CustomerApp({ token }) {
         <div><strong>{Number(item.quantity)} × {item.name}</strong>{item.notes && <small>{item.notes}</small>}<small>{statusLabel[item.status] || item.status}</small></div><strong>{currency(item.subtotal)}</strong>
       </div>)}
     </section>
+    {changeableRequests.length > 0 && !editingRequestId && <section className="panel customer-change-requests">
+      <span className="eyebrow">Pedido ainda pendente</span><h2>Precisa corrigir algo?</h2>
+      <p>Enquanto a cozinha não aceitar, você pode alterar ou cancelar somente este novo pedido.</p>
+      {changeableRequests.map((request) => <div className="customer-change-request" key={request.id}>
+        <div><strong>Pedido enviado às {new Date(request.requested_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong>
+          <small>{request.items.map((item) => `${item.quantity} × ${item.name}`).join(' · ')}</small></div>
+        <button className="neutral" disabled={busy} onClick={() => startEditingRequest(request)}>Alterar ou cancelar</button>
+      </div>)}
+    </section>}
+    {editingRequestId && editable && <section className="panel customer-request-editor">
+      <div className="row"><div><span className="eyebrow">Editar pedido pendente</span><h2>Altere antes do aceite da cozinha</h2></div><button className="neutral small" disabled={busy} onClick={() => { setEditingRequestId(null); setEditCart({}); }}>Fechar</button></div>
+      <p>Após o aceite, os itens ficam protegidos e qualquer correção precisa ser feita pelo administrador.</p>
+      <div className="customer-menu">{products.map((p) => {
+        const count = editCart[p.id]?.quantity || 0;
+        return <article className="customer-product" key={p.id}><div><small>{p.category || 'Da casa'}</small><h3>{p.name}</h3><strong>{currency(p.price)}</strong></div>
+          <div className="qty"><button aria-label={`Diminuir ${p.name}`} disabled={busy || !count} onClick={() => changeEditItem(p.id, count - 1)}>−</button><span aria-live="polite">{count}</span><button aria-label={`Adicionar ${p.name}`} disabled={busy || !p.available || count >= 50} onClick={() => changeEditItem(p.id, count + 1)}>+</button></div>
+          {!p.available && <small>Indisponível no momento</small>}
+          {count > 0 && <input maxLength="300" disabled={busy} aria-label={`Observação para ${p.name}`} placeholder="Observação: sem cebola, por exemplo" value={editCart[p.id]?.notes || ''} onChange={(e) => setEditCart((current) => ({ ...current, [p.id]: { ...current[p.id], notes: e.target.value } }))} />}
+        </article>;
+      })}</div>
+      <div className="button-row"><button className="primary" disabled={busy || !editSelected.length} onClick={() => changeRequest('edit')}>Salvar pedido · {currency(editCartTotal)}</button>
+        <button className="danger" disabled={busy} onClick={() => changeRequest('cancel')}>Cancelar este pedido</button></div>
+    </section>}
     {editable && <section className="panel"><span className="eyebrow">Mais um pedido?</span><h2>Cardápio da casa</h2>
       <div className="form-grid"><input aria-label="Buscar no cardápio" placeholder="O que você gostaria de pedir?" value={search} onChange={(e) => setSearch(e.target.value)} />
         <select aria-label="Categoria do cardápio" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">Todas as categorias</option>{categories.map((name) => <option key={name}>{name}</option>)}</select></div>
