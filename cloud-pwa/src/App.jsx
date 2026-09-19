@@ -91,6 +91,17 @@ function queueMeta(type) {
   };
 }
 
+function businessDateLabel(value) {
+  if (!value) return "período selecionado";
+  const [year, month, day] = String(value).split("-").map(Number);
+  if (!year || !month || !day) return value;
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(year, month - 1, day, 12));
+}
+
 const KITCHEN_STATUS = {
   pendente: "Aguardando aceite",
   preparando: "Em preparo",
@@ -321,6 +332,25 @@ function App() {
     refreshAll().catch((error) => show(error.message, "error"));
   }, [session, refreshAll, show]);
 
+  // The financial summary is calculated by Supabase using the Sao Paulo
+  // business date. Refresh at the next local midnight so an open dashboard
+  // rolls over to zero without requiring a manual reload.
+  useEffect(() => {
+    if (!session) return undefined;
+    let timer;
+    const scheduleMidnightRefresh = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(24, 0, 3, 0);
+      timer = setTimeout(async () => {
+        await refreshAll().catch((error) => show(error.message, "error"));
+        scheduleMidnightRefresh();
+      }, Math.max(1_000, next.getTime() - now.getTime()));
+    };
+    scheduleMidnightRefresh();
+    return () => clearTimeout(timer);
+  }, [session, refreshAll, show]);
+
   useEffect(() => {
     if (!session || !supabase) return undefined;
     if (!profile?.establishment_id) return undefined;
@@ -417,6 +447,7 @@ function App() {
             setView={setView}
             canOrders={canOrders}
             canMoney={canMoney}
+            canAdmin={canAdmin}
             establishmentName={profile.establishments?.name}
             queuePending={serviceQueue.filter((item) => item.status === "pendente").length}
           />
@@ -639,10 +670,11 @@ function OfflineBanner({ online }) {
   );
 }
 
-function Dashboard({ data, cashSession, setView, canOrders, canMoney, establishmentName, queuePending }) {
+function Dashboard({ data, cashSession, setView, canOrders, canMoney, canAdmin, establishmentName, queuePending }) {
+  const businessDate = data?.business_date || todayISO();
   return (
     <section>
-      <Header title={establishmentName || "Painel do dia"} subtitle="Resumo sincronizado entre celular e computador" />
+      <Header title={establishmentName || "Painel do dia"} subtitle={`Resultados de ${businessDateLabel(businessDate)} · sincronizado entre celular e computador`} />
       <div className="actions-grid">
         {canOrders && <button className="primary big" onClick={() => setView("commands")}><span>Operação</span><strong>Nova comanda</strong></button>}
         {canMoney && <button className="success big" onClick={() => setView("cash")}><span>Financeiro</span><strong>Acessar caixa</strong></button>}
@@ -652,12 +684,20 @@ function Dashboard({ data, cashSession, setView, canOrders, canMoney, establishm
       <div className="metric-grid">
         <Metric label="Caixa" value={cashSession ? "ABERTO" : "FECHADO"} tone={cashSession ? "good" : "bad"} />
         <Metric label="Total vendido hoje" value={currency(data?.total_vendido_hoje)} />
-        <Metric label="Comandas abertas" value={data?.qtd_abertas ?? 0} />
+        <Metric label="Comandas abertas agora" value={data?.qtd_abertas ?? 0} />
         <Metric label="Finalizadas hoje" value={data?.qtd_finalizadas_hoje ?? 0} />
         <Metric label="Dinheiro" value={currency(data?.total_dinheiro)} />
         <Metric label="Pix" value={currency(data?.total_pix)} />
         <Metric label="Cartao" value={currency(data?.total_cartao)} />
-        <Metric label="Fila pendente" value={queuePending ?? data?.fila_pendente ?? 0} tone={queuePending ? "bad" : "good"} />
+        <Metric label="Fila pendente agora" value={queuePending ?? data?.fila_pendente ?? 0} tone={queuePending ? "bad" : "good"} />
+      </div>
+      <div className="dashboard-period-note">
+        <div>
+          <span className="eyebrow">Fechamento diário</span>
+          <strong>O painel mostra somente o movimento de hoje.</strong>
+          <p>Ao virar o dia, os indicadores financeiros começam novamente em zero. O histórico completo continua disponível em Relatórios.</p>
+        </div>
+        {canAdmin && <button className="neutral" onClick={() => setView("reports")}>Abrir histórico completo</button>}
       </div>
     </section>
   );
@@ -1566,20 +1606,20 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
 function ReportsPanel({ profiles }) {
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
+  const [period, setPeriod] = useState("today");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  async function load() {
+  async function load(range = { from, to }) {
     setLoading(true);
     try {
-      const data = await unwrap(
-        supabase
-          .from("commands")
-          .select("*, command_items(*), payments(*)")
-          .gte("business_date", from)
-          .lte("business_date", to)
-          .order("opened_at", { ascending: false })
-      );
+      let query = supabase
+        .from("commands")
+        .select("*, command_items(*), payments(*)")
+        .order("opened_at", { ascending: false });
+      if (range.from) query = query.gte("business_date", range.from);
+      if (range.to) query = query.lte("business_date", range.to);
+      const data = await unwrap(query);
       // Keep cancellations with items for operational history; discard empty drafts from this report.
       setRows((data || []).filter((row) => row.status !== "cancelada" || row.command_items?.length > 0));
     } finally {
@@ -1588,8 +1628,23 @@ function ReportsPanel({ profiles }) {
   }
 
   useEffect(() => {
-    load();
+    load({ from: todayISO(), to: todayISO() });
   }, []);
+
+  function selectToday() {
+    const date = todayISO();
+    setFrom(date);
+    setTo(date);
+    setPeriod("today");
+    load({ from: date, to: date });
+  }
+
+  function selectAllHistory() {
+    setFrom("");
+    setTo("");
+    setPeriod("all");
+    load({ from: "", to: "" });
+  }
 
   const paid = rows.filter((row) => row.status === "paga");
   const total = paid.reduce((sum, row) => sum + Number(row.total || 0), 0);
@@ -1600,11 +1655,16 @@ function ReportsPanel({ profiles }) {
 
   return (
     <section>
-      <Header title="Relatorios" subtitle="Vendas e pagamentos do periodo" />
-      <div className="quick-form">
-        <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-        <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-        <button className="primary" onClick={load}>{loading ? "Carregando..." : "Filtrar"}</button>
+      <Header title="Relatórios" subtitle="Vendas e pagamentos por período" />
+      <div className="panel report-toolbar">
+        <div className="quick-form">
+          <div><label>De</label><input type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPeriod("custom"); }} /></div>
+          <div><label>Até</label><input type="date" value={to} onChange={(event) => { setTo(event.target.value); setPeriod("custom"); }} /></div>
+          <button className="primary" onClick={() => load({ from, to })}>{loading ? "Carregando..." : "Filtrar período"}</button>
+          <button className="neutral" onClick={selectToday}>Hoje</button>
+          <button className="neutral" onClick={selectAllHistory}>Histórico completo</button>
+        </div>
+        <p className="report-period">{period === "all" ? "Exibindo todo o histórico disponível" : period === "today" ? `Exibindo ${businessDateLabel(todayISO())}` : "Exibindo o período selecionado"}</p>
       </div>
       <div className="metric-grid">
         <Metric label="Total vendido" value={currency(total)} />

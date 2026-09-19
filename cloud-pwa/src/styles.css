@@ -1026,6 +1026,56 @@ small {
   gap: 14px;
 }
 
+.dashboard-period-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 16px;
+  padding: 17px 19px;
+  color: var(--text);
+  background: linear-gradient(135deg, #fffaf4, #f5ede3);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.dashboard-period-note strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.98rem;
+}
+
+.dashboard-period-note p {
+  max-width: 760px;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.report-toolbar {
+  margin-bottom: 14px;
+  padding: 15px;
+}
+
+.report-toolbar .quick-form {
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto auto auto;
+  align-items: end;
+}
+
+.report-toolbar label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.report-period {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .metric,
 .panel,
 .command-card,
@@ -1461,6 +1511,10 @@ small {
     grid-template-columns: 1fr;
   }
 
+  .report-toolbar .quick-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .login-layout {
     min-height: auto;
     grid-template-columns: 1fr;
@@ -1503,6 +1557,15 @@ small {
 
   .panel {
     padding: 16px;
+  }
+
+  .dashboard-period-note {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .report-toolbar .quick-form {
+    grid-template-columns: 1fr;
   }
 
   .login-screen {

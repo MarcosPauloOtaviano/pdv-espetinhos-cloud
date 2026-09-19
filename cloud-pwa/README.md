@@ -153,6 +153,19 @@ na contagem de canceladas; os registros técnicos continuam disponíveis para au
 - Eventos sao transmitidos por Realtime somente para o estabelecimento da
   sessao e geram aviso visual; o som e habilitado pelo operador no navegador.
 
+## Painel diário e relatórios
+
+- O Painel mostra os indicadores financeiros do dia comercial atual, usando o
+  fuso de Sao Paulo no banco (`total vendido`, `finalizadas` e formas de
+  pagamento). Comandas abertas e fila pendente continuam representando a
+  operacao atual, independentemente do dia em que foram abertas.
+- Se o painel permanecer aberto durante a virada do dia, ele atualiza
+  automaticamente poucos segundos depois da meia-noite e inicia os indicadores
+  financeiros em zero.
+- Administradores podem abrir **Relatórios** pelo atalho do painel. A tela
+  permite filtrar um período, voltar para **Hoje** ou carregar o **Histórico
+  completo** sem alterar os dados operacionais.
+
 ## Regras de caixa
 
 - Existe apenas um caixa aberto por vez, garantido por indice unico parcial.
