@@ -454,7 +454,7 @@ function SetupScreen() {
 }
 
 function LoginScreen({ show }) {
-  const [login, setLogin] = useState("admin");
+  const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -502,7 +502,13 @@ function LoginScreen({ show }) {
             <h2>Bem-vindo</h2>
             <p>Entre para acessar o ambiente do seu estabelecimento.</p>
             <label>Usuário ou e-mail</label>
-            <input value={login} onChange={(event) => setLogin(event.target.value)} autoComplete="username" />
+            <input
+              value={login}
+              onChange={(event) => setLogin(event.target.value)}
+              autoComplete="username"
+              placeholder="Digite seu usuário ou e-mail"
+              autoFocus
+            />
             <label>Senha</label>
             <input
               value={password}
