@@ -173,6 +173,8 @@ function App() {
   const audioContextRef = useRef(null);
   const notifiedRequestsRef = useRef(new Set());
   const refreshTimerRef = useRef(null);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
 
   const canMoney = roleCanManageMoney(profile?.role);
   const canAdmin = roleCanManageAdmin(profile?.role);
@@ -378,11 +380,24 @@ function App() {
     refreshAll().catch((error) => show(error.message, "error"));
   }, [session, refreshAll, show]);
 
-  const scheduleRefresh = useCallback((delay = 250) => {
-    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+  const scheduleRefresh = useCallback((delay = 400) => {
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    if (refreshTimerRef.current) return;
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null;
-      refreshAll().catch((error) => show(error.message, "error"));
+      refreshInFlightRef.current = true;
+      refreshAll()
+        .catch((error) => show(error.message, "error"))
+        .finally(() => {
+          refreshInFlightRef.current = false;
+          if (refreshQueuedRef.current) {
+            refreshQueuedRef.current = false;
+            scheduleRefresh(delay);
+          }
+        });
     }, delay);
   }, [refreshAll, show]);
 
