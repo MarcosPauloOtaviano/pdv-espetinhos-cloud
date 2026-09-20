@@ -155,7 +155,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState("dashboard");
+  const [view, setView] = useState(() => new URLSearchParams(window.location.search).get("view") || "dashboard");
   const [selectedCommandId, setSelectedCommandId] = useState(null);
   const [settings, setSettings] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -167,8 +167,12 @@ function App() {
   const [serviceQueue, setServiceQueue] = useState([]);
   const [establishments, setEstablishments] = useState([]);
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState(
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported"
+  );
   const audioContextRef = useRef(null);
   const notifiedRequestsRef = useRef(new Set());
+  const refreshTimerRef = useRef(null);
 
   const canMoney = roleCanManageMoney(profile?.role);
   const canAdmin = roleCanManageAdmin(profile?.role);
@@ -194,9 +198,22 @@ function App() {
   }, []);
 
   async function enableSound() {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      const permission = Notification.permission === "default"
+        ? await Notification.requestPermission()
+        : Notification.permission;
+      setNotificationPermission(permission);
+      if (permission === "granted") {
+        show("Notificações do celular ativadas", "success");
+        return;
+      }
+      if (permission === "denied") {
+        show("Notificações bloqueadas. Libere-as nas configurações do navegador para ouvir o som padrão do celular.", "error");
+      }
+    }
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) {
-      show("Este navegador nao oferece notificacao sonora.", "error");
+      show("Este navegador não oferece notificações sonoras.", "error");
       return;
     }
     const context = audioContextRef.current || new AudioContextClass();
@@ -204,8 +221,36 @@ function App() {
     await context.resume();
     setSoundEnabled(true);
     playQueueSound();
-    show("Som da fila ativado", "success");
+    show("Fallback sonoro ativado neste navegador", "success");
   }
+
+  const showSystemNotification = useCallback(async (request, place, meta) => {
+    if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") {
+      return false;
+    }
+    const body = `${meta.label}${place ? ` · ${place}` : ""}`;
+    const options = {
+      body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      tag: `service-queue-${request.id}`,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      data: { url: `${window.location.origin}/?view=queue` },
+    };
+    try {
+      const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.ready : null;
+      if (registration?.showNotification) {
+        await registration.showNotification("PDV Espetinhos", options);
+      } else {
+        new Notification("PDV Espetinhos", options);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
 
   const notifyQueueRequest = useCallback(async (request) => {
     const meta = queueMeta(request.request_type);
@@ -221,9 +266,10 @@ function App() {
         place = `${table}${command.customer_name ? ` · ${command.customer_name}` : ""}`;
       }
     }
-    playQueueSound(request.request_type);
+    const systemNotificationShown = await showSystemNotification(request, place, meta);
+    if (!systemNotificationShown && soundEnabled) playQueueSound(request.request_type);
     show(`${meta.icon} ${place ? `${place} · ` : ""}${meta.label}`, `queue-${meta.tone}`);
-  }, [playQueueSound, show]);
+  }, [playQueueSound, show, showSystemNotification, soundEnabled]);
 
   const refreshAll = useCallback(async () => {
     if (!supabase || !session) return;
@@ -332,6 +378,27 @@ function App() {
     refreshAll().catch((error) => show(error.message, "error"));
   }, [session, refreshAll, show]);
 
+  const scheduleRefresh = useCallback((delay = 250) => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshAll().catch((error) => show(error.message, "error"));
+    }, delay);
+  }, [refreshAll, show]);
+
+  useEffect(() => () => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return undefined;
+    const onServiceWorkerMessage = (event) => {
+      if (event.data?.type === "OPEN_QUEUE") setView("queue");
+    };
+    navigator.serviceWorker.addEventListener("message", onServiceWorkerMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onServiceWorkerMessage);
+  }, []);
+
   // The financial summary is calculated by Supabase using the Sao Paulo
   // business date. Refresh at the next local midnight so an open dashboard
   // rolls over to zero without requiring a manual reload.
@@ -372,15 +439,19 @@ function App() {
               await notifyQueueRequest(payload.new);
             }
           }
-          refreshAll().catch((error) => show(error.message, "error"));
+          scheduleRefresh();
         }
       );
     });
-    channel.subscribe();
+    channel.subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        show("A conexão em tempo real foi interrompida. O sistema tentará reconectar.", "error");
+      }
+    });
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [session, profile?.establishment_id, refreshAll, show, notifyQueueRequest]);
+  }, [session, profile?.establishment_id, scheduleRefresh, show, notifyQueueRequest]);
 
   const selectedCommand = useMemo(
     () => commands.find((command) => command.id === selectedCommandId),
@@ -437,8 +508,8 @@ function App() {
 
       <main className="main">
         <OfflineBanner online={online} />
-        <button className={`sound-toggle ${soundEnabled ? "enabled" : ""}`} onClick={enableSound}>
-          {soundEnabled ? "Alertas sonoros ativos" : "Ativar alertas sonoros"}
+        <button className={`sound-toggle ${notificationPermission === "granted" || soundEnabled ? "enabled" : ""}`} onClick={enableSound}>
+          {notificationPermission === "granted" ? "Notificações do celular ativas" : soundEnabled ? "Fallback sonoro ativo" : "Ativar som do celular"}
         </button>
         {view === "dashboard" && (
           <Dashboard

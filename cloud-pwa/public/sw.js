@@ -1,4 +1,4 @@
-const CACHE_NAME = "dudair-cloud-pwa-v2";
+const CACHE_NAME = "dudair-cloud-pwa-v3";
 const SHELL = ["/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -30,5 +30,20 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => caches.match(event.request))
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || "/?view=queue", self.location.origin);
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
+      const existing = windowClients.find((client) => new URL(client.url).origin === target.origin);
+      if (existing) {
+        existing.postMessage({ type: "OPEN_QUEUE" });
+        return existing.focus();
+      }
+      return clients.openWindow(target.href);
+    })
   );
 });

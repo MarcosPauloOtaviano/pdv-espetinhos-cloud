@@ -151,7 +151,21 @@ na contagem de canceladas; os registros técnicos continuam disponíveis para au
   concorrente, garantindo que a solicitacao pendente mais antiga seja atendida
   primeiro dentro do estabelecimento.
 - Eventos sao transmitidos por Realtime somente para o estabelecimento da
-  sessao e geram aviso visual; o som e habilitado pelo operador no navegador.
+  sessao e geram aviso visual. O operador pode ativar **Ativar som do celular**
+  para solicitar a permissao de notificacoes do sistema; quando concedida, o
+  Service Worker usa `showNotification` com `silent: false`, deixando o Android,
+  iOS ou navegador escolher o som padrao do aparelho. Se o navegador nao
+  oferecer essa API, existe um fallback sonoro local.
+
+Em producao, a notificacao padrao funciona enquanto a PWA estiver aberta ou
+instalada e com a sessao realtime conectada. Para alertar com o aplicativo
+totalmente encerrado, ainda e necessario configurar Web Push (assinatura por
+garcom, VAPID e uma rotina server-side para publicar o evento).
+
+As atualizacoes realtime sao agrupadas em pequenas janelas para evitar uma
+recarga completa por evento quando varias mesas fazem pedidos ao mesmo tempo.
+Antes de uma operacao com muitas mesas, valide os limites do plano Supabase e
+execute um teste de carga com a quantidade real de celulares conectados.
 
 ## Painel diário e relatórios
 
