@@ -6,3 +6,5 @@ scripts/setup-users.json
 scripts/*-access.local.json
 migration-csv/
 *.log
+.vercel
+.env*
