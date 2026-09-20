@@ -91,6 +91,11 @@ VITE_SUPABASE_PUBLISHABLE_KEY=SUA_CHAVE_PUBLICAVEL
 - Para criar ou atualizar usuarios pelo app: entre como admin, abra
   `Configuracoes` > `Usuarios`, preencha usuario, nome, senha e perfil.
   Se o usuario ja existir, o formulario atualiza nome, senha, perfil e status.
+- O usuario de acesso e um identificador profissional (letras minusculas,
+  numeros, ponto, hifen ou sublinhado); nao e necessario digitar `@`. O app
+  normaliza esse identificador para um email tecnico interno e preserva o email
+  real apenas quando informado para recuperacao de senha. O identificador deve
+  ser unico na plataforma para evitar ambiguidades entre estabelecimentos.
 - A criacao de usuarios usa a Edge Function `admin-upsert-user`, publicada no
   Supabase com JWT obrigatorio e liberada apenas para admin.
 
@@ -178,7 +183,9 @@ execute um teste de carga com a quantidade real de celulares conectados.
   financeiros em zero.
 - Administradores podem abrir **Relatórios** pelo atalho do painel. A tela
   permite filtrar um período, voltar para **Hoje** ou carregar o **Histórico
-  completo** sem alterar os dados operacionais.
+  completo** sem alterar os dados operacionais. O filtro inclui também vendas e
+  cancelamentos encerrados depois da meia-noite, usando a mesma data de
+  fechamento do painel, mesmo quando a comanda foi aberta no dia anterior.
 
 ## Regras de caixa
 

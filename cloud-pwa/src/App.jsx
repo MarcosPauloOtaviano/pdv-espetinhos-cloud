@@ -102,6 +102,18 @@ function businessDateLabel(value) {
   }).format(new Date(year, month - 1, day, 12));
 }
 
+function businessDateStartISO(value) {
+  if (!value) return null;
+  return new Date(`${value}T00:00:00-03:00`).toISOString();
+}
+
+function nextBusinessDate(value) {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00-03:00`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 const KITCHEN_STATUS = {
   pendente: "Aguardando aceite",
   preparando: "Em preparo",
@@ -607,7 +619,7 @@ function ShellFrame({ children, toast, online }) {
   return (
     <div className="app-frame">
       {children}
-      {toast && <div className={`toast ${toast.type}`}>{toast.message}</div>}
+      {toast && <div role="status" aria-live="polite" aria-atomic="true" className={`toast ${toast.type}`}>{toast.message}</div>}
       {online === false && <div className="offline-dot">Sem internet</div>}
     </div>
   );
@@ -856,8 +868,8 @@ function CommandsList({ commands, profiles, canOrders, setSelectedCommandId, run
       </div>
       {canOrders && (
         <form className="quick-form" onSubmit={createCommand}>
-          <input placeholder="Cliente" value={customer} onChange={(event) => setCustomer(event.target.value)} />
-          <input placeholder="Mesa/identificacao" value={table} onChange={(event) => setTable(event.target.value)} />
+          <input aria-label="Nome do cliente" placeholder="Cliente" value={customer} onChange={(event) => setCustomer(event.target.value)} />
+          <input aria-label="Mesa ou identificação" placeholder="Mesa/identificacao" value={table} onChange={(event) => setTable(event.target.value)} />
           <button className="primary">Criar comanda</button>
         </form>
       )}
@@ -1031,10 +1043,10 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
         <div className="panel">
           <h2>Itens</h2>
           <div className="form-grid">
-            <input value={customer} onChange={(event) => setCustomer(event.target.value)} placeholder="Cliente" disabled={!editable} />
-            <input value={tableRef} onChange={(event) => setTableRef(event.target.value)} placeholder="Mesa/Id" disabled={!editable} />
+            <input aria-label="Nome do cliente" value={customer} onChange={(event) => setCustomer(event.target.value)} placeholder="Cliente" disabled={!editable} />
+            <input aria-label="Mesa ou identificação" value={tableRef} onChange={(event) => setTableRef(event.target.value)} placeholder="Mesa/Id" disabled={!editable} />
           </div>
-          <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Observacao" disabled={!editable} />
+          <textarea aria-label="Observações da comanda" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Observacao" disabled={!editable} />
           {editable && <button className="neutral" onClick={saveInfo}>Salvar dados</button>}
 
           <div className="items">
@@ -1525,7 +1537,7 @@ function QueuePanel({ requests, profiles, run }) {
       <div className="queue-section">
         <h2>Aguardando em ordem de chegada</h2>
         {visiblePending.map((item) => requestCard(item, pending.indexOf(item)))}
-        {!visiblePending.length && <div className="empty">Nenhuma solicitação corresponde ao filtro.</div>}
+        {!visiblePending.length && <div className="empty">{pending.length ? "Nenhuma solicitação corresponde ao filtro." : "A fila está vazia."}</div>}
       </div>
     </section>
   );
@@ -1706,8 +1718,25 @@ function ReportsPanel({ profiles }) {
       if (range.from) query = query.gte("business_date", range.from);
       if (range.to) query = query.lte("business_date", range.to);
       const data = await unwrap(query);
+
+      // The dashboard uses the payment/closing date for today's totals. Add
+      // paid or cancelled commands closed in the selected period even when
+      // they were opened on the previous business date (e.g. after midnight).
+      let closedData = [];
+      if (range.from || range.to) {
+        let closedQuery = supabase
+          .from("commands")
+          .select("*, command_items(*), payments(*)")
+          .not("closed_at", "is", null)
+          .order("closed_at", { ascending: false });
+        if (range.from) closedQuery = closedQuery.gte("closed_at", businessDateStartISO(range.from));
+        if (range.to) closedQuery = closedQuery.lt("closed_at", businessDateStartISO(nextBusinessDate(range.to)));
+        closedData = await unwrap(closedQuery);
+      }
+
+      const rowsById = new Map([...(data || []), ...(closedData || [])].map((row) => [row.id, row]));
       // Keep cancellations with items for operational history; discard empty drafts from this report.
-      setRows((data || []).filter((row) => row.status !== "cancelada" || row.command_items?.length > 0));
+      setRows([...rowsById.values()].filter((row) => row.status !== "cancelada" || row.command_items?.length > 0));
     } finally {
       setLoading(false);
     }
@@ -1855,7 +1884,7 @@ function PlatformPanel({ establishments, run }) {
             <option value="">Selecione</option>
             {establishments.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select></div>
-          <div><label>Usuario</label><input value={adminForm.username} onChange={(event) => setAdminForm((current) => ({ ...current, username: event.target.value }))} required /></div>
+          <div><label>Usuario</label><input pattern="[a-z0-9_.-]+" title="Use apenas letras minúsculas, números, ponto, hífen ou sublinhado." value={adminForm.username} onChange={(event) => setAdminForm((current) => ({ ...current, username: event.target.value }))} required /></div>
           <div><label>Nome</label><input value={adminForm.fullName} onChange={(event) => setAdminForm((current) => ({ ...current, fullName: event.target.value }))} /></div>
           <div><label>Email real</label><input type="email" value={adminForm.email} onChange={(event) => setAdminForm((current) => ({ ...current, email: event.target.value }))} placeholder="Para recuperar a senha" /></div>
           <div><label>Senha inicial</label><input type="password" minLength="6" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} required /></div>
@@ -1983,6 +2012,8 @@ function SettingsPanel({ settings, profiles, establishment, establishmentId, run
             <label>Usuario</label>
             <input
               placeholder="ex: atendente2"
+              pattern="[a-z0-9_.-]+"
+              title="Use apenas letras minúsculas, números, ponto, hífen ou sublinhado. Não é necessário usar @."
               value={userForm.username}
               onChange={(event) => setUserForm((current) => ({ ...current, username: event.target.value }))}
               required
@@ -2027,7 +2058,7 @@ function SettingsPanel({ settings, profiles, establishment, establishmentId, run
           </label>
           <button className="primary">Criar ou atualizar usuario</button>
           <small>
-            Para entrar, use apenas o usuario. Se ele ja existir, o app atualiza perfil, nome e senha.
+            Para entrar, use apenas o usuario (sem @). Use letras minúsculas, números, ponto, hífen ou sublinhado; o sistema cria o email técnico internamente.
           </small>
         </form>
         <div className="table-list">
