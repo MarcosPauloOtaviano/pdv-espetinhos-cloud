@@ -224,6 +224,32 @@ small {
   margin-bottom: 14px;
 }
 
+.inventory-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--line);
+  background: linear-gradient(135deg, var(--panel), var(--surface-warm));
+}
+
+.inventory-toolbar strong {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.inventory-toolbar p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.check-help {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
 .checks-row {
   margin: 12px 0;
 }
@@ -796,6 +822,11 @@ small {
 
   .inventory-row {
     display: flex;
+  }
+
+  .inventory-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .queue-card {

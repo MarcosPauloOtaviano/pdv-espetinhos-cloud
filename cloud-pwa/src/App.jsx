@@ -1550,6 +1550,8 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [categoryName, setCategoryName] = useState("");
+  const productFormRef = useRef(null);
+  const productNameRef = useRef(null);
 
   const visibleProducts = filterProducts(products, {
     search,
@@ -1560,6 +1562,19 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
 
   function setField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function focusProductForm() {
+    requestAnimationFrame(() => {
+      productFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      productNameRef.current?.focus({ preventScroll: true });
+    });
+  }
+
+  function startNewProduct() {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    focusProductForm();
   }
 
   function edit(product) {
@@ -1575,6 +1590,7 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
       notes: product.notes || "",
       active: Boolean(product.active),
     });
+    focusProductForm();
   }
 
   async function submit(event) {
@@ -1627,6 +1643,15 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
   return (
     <section>
       <Header title="Estoque e produtos" subtitle="Catalogo, custos e quantidades sincronizados" />
+      {canAdmin && (
+        <div className="panel inventory-toolbar">
+          <div>
+            <strong>Gerencie seu catálogo</strong>
+            <p>Cadastre produtos, defina a quantidade disponível e escolha se o estoque será controlado.</p>
+          </div>
+          <button type="button" className="primary" onClick={startNewProduct}>Adicionar produto</button>
+        </div>
+      )}
       <div className="metric-grid inventory-metrics">
         <Metric label="Produtos ativos" value={products.filter((product) => product.active).length} />
         <Metric label="Estoque baixo" value={lowStock.length} tone={lowStock.length ? "bad" : "good"} />
@@ -1642,26 +1667,26 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
               <button className="neutral">Criar categoria</button>
             </div>
           </form>
-          <form className="panel product-form" onSubmit={submit}>
+          <form className="panel product-form" ref={productFormRef} onSubmit={submit}>
             <div className="row">
               <h2>{editing ? "Editar produto" : "Novo produto"}</h2>
               {editing && <button type="button" className="neutral small" onClick={cancelEdit}>Cancelar edicao</button>}
             </div>
             <div className="form-grid">
-              <div><label>Nome</label><input placeholder="Nome" value={form.name} onChange={(event) => setField("name", event.target.value)} required /></div>
+              <div><label>Nome</label><input ref={productNameRef} placeholder="Nome" value={form.name} onChange={(event) => setField("name", event.target.value)} required /></div>
               <div><label>Categoria</label><select value={form.category_id} onChange={(event) => setField("category_id", event.target.value)}>
                 <option value="">Sem categoria</option>
                 {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
               </select></div>
               <div><label>Preco de venda</label><input placeholder="0,00" value={form.price} onChange={(event) => setField("price", event.target.value)} required /></div>
               <div><label>Custo</label><input placeholder="0,00" value={form.cost} onChange={(event) => setField("cost", event.target.value)} /></div>
-              <div><label>Quantidade em estoque</label><input placeholder="0" value={form.stock_quantity} onChange={(event) => setField("stock_quantity", event.target.value)} /></div>
-              <div><label>Alerta de estoque baixo</label><input placeholder="5" value={form.low_stock_threshold} onChange={(event) => setField("low_stock_threshold", event.target.value)} /></div>
+              <div><label htmlFor="product-stock-quantity">Quantidade em estoque</label><input id="product-stock-quantity" type="number" min="0" step="0.001" placeholder="0" value={form.stock_quantity} onChange={(event) => setField("stock_quantity", event.target.value)} disabled={!form.track_stock} /></div>
+              <div><label htmlFor="product-low-stock-threshold">Alerta de estoque baixo</label><input id="product-low-stock-threshold" type="number" min="0" step="0.001" placeholder="5" value={form.low_stock_threshold} onChange={(event) => setField("low_stock_threshold", event.target.value)} disabled={!form.track_stock} /></div>
             </div>
             <label>Observacoes</label>
             <textarea placeholder="Observacoes internas do produto" value={form.notes} onChange={(event) => setField("notes", event.target.value)} />
             <div className="button-row checks-row">
-              <label className="check"><input type="checkbox" checked={form.track_stock} onChange={(event) => setField("track_stock", event.target.checked)} />Controlar estoque</label>
+              <label className="check"><input type="checkbox" checked={form.track_stock} onChange={(event) => setField("track_stock", event.target.checked)} />Controlar estoque <span className="check-help">(desmarcado = estoque ilimitado)</span></label>
               <label className="check"><input type="checkbox" checked={form.active} onChange={(event) => setField("active", event.target.checked)} />Produto ativo</label>
             </div>
             <button className="primary">{editing ? "Salvar alteracoes" : "Criar produto"}</button>
