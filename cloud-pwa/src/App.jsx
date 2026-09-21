@@ -921,6 +921,7 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
   const [discount, setDiscount] = useState(String(command.discount || "0"));
   const [paymentMode, setPaymentMode] = useState(null);
   const [adjustingItem, setAdjustingItem] = useState(null);
+  const [cancelReasonOpen, setCancelReasonOpen] = useState(false);
 
   useEffect(() => {
     setCustomer(command.customer_name || "");
@@ -981,8 +982,16 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
   }
 
   async function cancelCommand() {
-    if (!window.confirm("Cancelar esta comanda?")) return;
-    const result = await run(() => unwrap(supabase.rpc("cancel_command", { p_command_id: command.id })), "Comanda cancelada");
+    const hasItems = (command.command_items || []).length > 0;
+    if (hasItems) {
+      setCancelReasonOpen(true);
+      return;
+    }
+    if (!window.confirm("Cancelar esta comanda vazia?")) return;
+    const result = await run(
+      () => unwrap(supabase.rpc("cancel_command_with_reason", { p_command_id: command.id, p_reason: "" })),
+      "Comanda cancelada"
+    );
     if (result !== null) close();
   }
 
@@ -1136,6 +1145,17 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
           onClose={() => setAdjustingItem(null)}
         />
       )}
+      {cancelReasonOpen && (
+        <CancelCommandModal
+          command={command}
+          run={run}
+          onClose={() => setCancelReasonOpen(false)}
+          onCancelled={() => {
+            setCancelReasonOpen(false);
+            close();
+          }}
+        />
+      )}
       {paymentMode && (
         <PaymentModal
           command={command}
@@ -1147,6 +1167,46 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
         />
       )}
     </section>
+  );
+}
+
+function CancelCommandModal({ command, run, onClose, onCancelled }) {
+  const [reason, setReason] = useState("");
+
+  async function cancel() {
+    const cleanReason = reason.trim();
+    if (cleanReason.length < 5) return;
+    const result = await run(
+      () => unwrap(supabase.rpc("cancel_command_with_reason", {
+        p_command_id: command.id,
+        p_reason: cleanReason,
+      })),
+      "Comanda cancelada com justificativa"
+    );
+    if (result) onCancelled();
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="cancel-command-title">
+      <div className="modal item-adjustment-modal">
+        <div className="row">
+          <h2 id="cancel-command-title">Cancelar comanda com itens</h2>
+          <button className="neutral small" onClick={onClose}>Voltar</button>
+        </div>
+        <p>Esta comanda possui produtos. Informe o motivo do cancelamento; a justificativa ficará registrada no histórico.</p>
+        <label htmlFor="cancel-command-reason">Justificativa obrigatória</label>
+        <textarea
+          id="cancel-command-reason"
+          maxLength="500"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="Ex.: cliente desistiu antes do preparo"
+        />
+        <button className="danger" disabled={reason.trim().length < 5} onClick={cancel}>
+          Cancelar com justificativa
+        </button>
+      </div>
+    </div>
   );
 }
 

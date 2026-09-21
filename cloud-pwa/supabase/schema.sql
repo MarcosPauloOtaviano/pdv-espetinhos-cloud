@@ -595,7 +595,7 @@ begin
 end;
 $$;
 
-create or replace function public.cancel_command(p_command_id uuid)
+create or replace function public.cancel_command_with_reason(p_command_id uuid, p_reason text default '')
 returns public.commands
 language plpgsql
 security definer
@@ -603,6 +603,8 @@ set search_path = public
 as $$
 declare
   v_command public.commands;
+  v_reason text := nullif(left(trim(coalesce(p_reason, '')), 500), '');
+  v_item_count integer;
 begin
   if not public.can_edit_orders() then
     raise exception 'Seu perfil nao tem permissao para cancelar comandas.';
@@ -611,6 +613,11 @@ begin
   if not found then raise exception 'Comanda nao encontrada.'; end if;
   if v_command.status not in ('aberto', 'aguardando_pagamento', 'fiado') then
     raise exception 'Esta comanda nao pode ser cancelada.';
+  end if;
+
+  select count(*) into v_item_count from public.command_items where command_id = p_command_id;
+  if v_item_count > 0 and (v_reason is null or char_length(v_reason) < 5) then
+    raise exception 'Informe uma justificativa de ao menos 5 caracteres para cancelar uma comanda com itens.';
   end if;
 
   if v_command.status = 'fiado' then
@@ -630,8 +637,25 @@ begin
   where id = p_command_id
   returning * into v_command;
 
-  perform public.add_audit_log('cancelled', 'commands', p_command_id, null, to_jsonb(v_command));
+  perform public.add_audit_log(
+    'cancelled',
+    'commands',
+    p_command_id,
+    null,
+    jsonb_build_object('command', to_jsonb(v_command), 'reason', v_reason)
+  );
   return v_command;
+end;
+$$;
+
+create or replace function public.cancel_command(p_command_id uuid)
+returns public.commands
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return public.cancel_command_with_reason(p_command_id, '');
 end;
 $$;
 
@@ -1110,7 +1134,7 @@ begin
         'add_audit_log', 'recalculate_command_totals', 'create_command',
         'add_command_item', 'update_command_item_quantity',
         'remove_command_item', 'set_command_discount', 'update_command_info',
-        'update_item_kitchen_status', 'mark_command_pending', 'cancel_command',
+        'update_item_kitchen_status', 'mark_command_pending', 'cancel_command', 'cancel_command_with_reason',
         'open_cash_session', 'add_cash_movement', 'finalize_command',
         'get_cash_summary', 'close_cash_session', 'get_dashboard_summary'
       ])
@@ -1128,7 +1152,7 @@ begin
         'can_edit_orders', 'create_command', 'add_command_item',
         'update_command_item_quantity', 'remove_command_item',
         'set_command_discount', 'update_command_info',
-        'update_item_kitchen_status', 'mark_command_pending', 'cancel_command',
+        'update_item_kitchen_status', 'mark_command_pending', 'cancel_command', 'cancel_command_with_reason',
         'open_cash_session', 'add_cash_movement', 'finalize_command',
         'get_cash_summary', 'close_cash_session', 'get_dashboard_summary'
       ])
