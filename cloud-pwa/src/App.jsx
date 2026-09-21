@@ -56,6 +56,15 @@ const DEFAULT_USER_FORM = {
   active: true,
 };
 
+const ESTABLISHMENT_SETTING_KEYS = new Set([
+  "establishment_name",
+  "pix_key",
+  "pix_receiver_name",
+  "pix_city",
+  "pix_description",
+  "theme",
+]);
+
 const QUEUE_LABELS = {
   pedido_digital: "Pedido",
   chamar_garcom: "Chamar garcom",
@@ -1956,8 +1965,15 @@ function SettingsPanel({ settings, profiles, currentProfile, establishment, esta
   const [deletingUserId, setDeletingUserId] = useState(null);
 
   useEffect(() => {
-    setValues(Object.fromEntries(settings.map((item) => [item.key, item.value || ""])));
-  }, [settings]);
+    setValues({
+      ...Object.fromEntries(settings.map((item) => [item.key, item.value || ""])),
+      establishment_name: establishment?.name || "",
+      primary_color: establishment?.primary_color || "#a85a2a",
+      secondary_color: establishment?.secondary_color || "#6f3f2b",
+      accent_color: establishment?.accent_color || "#d79a3a",
+      background_color: establishment?.background_color || "#f6f2ec",
+    });
+  }, [settings, establishment]);
 
   function setValue(key, value) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -1965,27 +1981,35 @@ function SettingsPanel({ settings, profiles, currentProfile, establishment, esta
 
   async function saveSettings(event) {
     event.preventDefault();
-    const updates = Object.entries(values).map(([key, value]) =>
-      unwrap(supabase.from("settings").upsert(
-        { establishment_id: establishmentId, key, value },
-        { onConflict: "establishment_id,key" }
-      ))
-    );
-    updates.push(
-      unwrap(
+    const establishmentUpdate = {
+      name: values.establishment_name?.trim() || establishment?.name,
+      primary_color: values.primary_color || establishment?.primary_color,
+      secondary_color: values.secondary_color || establishment?.secondary_color,
+      accent_color: values.accent_color || establishment?.accent_color,
+      background_color: values.background_color || establishment?.background_color,
+    };
+    const settingUpdates = Object.entries(values)
+      .filter(([key]) => ESTABLISHMENT_SETTING_KEYS.has(key))
+      .map(([key, value]) =>
+        unwrap(supabase.from("settings").upsert(
+          { establishment_id: establishmentId, key, value },
+          { onConflict: "establishment_id,key" }
+        ))
+      );
+
+    await run(async () => {
+      const updated = await unwrap(
         supabase
           .from("establishments")
-          .update({
-            name: values.establishment_name || establishment?.name,
-            primary_color: values.primary_color || establishment?.primary_color,
-            secondary_color: values.secondary_color || establishment?.secondary_color,
-            accent_color: values.accent_color || establishment?.accent_color,
-            background_color: values.background_color || establishment?.background_color,
-          })
+          .update(establishmentUpdate)
           .eq("id", establishmentId)
-      )
-    );
-    await run(async () => Promise.all(updates), "Configuracoes salvas");
+          .select("id")
+          .maybeSingle()
+      );
+      if (!updated?.id) throw new Error("Nao foi possivel atualizar o estabelecimento atual.");
+      await Promise.all(settingUpdates);
+      return updated;
+    }, "Configuracoes salvas");
   }
 
   async function updateRole(profileId, role) {
