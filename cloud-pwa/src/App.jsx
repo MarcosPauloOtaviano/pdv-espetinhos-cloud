@@ -266,9 +266,9 @@ function App() {
     try {
       const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.ready : null;
       if (registration?.showNotification) {
-        await registration.showNotification("PDV Espetinhos", options);
+        await registration.showNotification("CloudPDV", options);
       } else {
-        new Notification("PDV Espetinhos", options);
+        new Notification("CloudPDV", options);
       }
       return true;
     } catch {
@@ -524,8 +524,8 @@ function App() {
     <ShellFrame toast={toast} online={online}>
       <header className="sidebar">
         <div className="brand-lockup">
-          <span className="brand-overline">PDV ESPETINHOS</span>
-          <div className="brand">{profile.establishments?.name || "PDV Espetinhos"}</div>
+          <span className="brand-overline">CLOUDPDV</span>
+          <div className="brand">{profile.establishments?.name || "CloudPDV"}</div>
         </div>
         <nav className="nav-list" aria-label="Navegação principal">
           <NavButton view={view} id="dashboard" label="Painel" setView={setView} />
@@ -643,7 +643,7 @@ function SetupScreen() {
   return (
     <ShellFrame>
       <div className="setup">
-        <h1>PDV Espetinhos</h1>
+        <h1>CloudPDV</h1>
         <p>Configure o Supabase antes de iniciar.</p>
         <ol>
           <li>Crie um projeto no Supabase.</li>
@@ -691,7 +691,7 @@ function LoginScreen({ show }) {
       <div className="login-screen">
         <div className="login-layout">
           <section className="login-showcase">
-            <span className="brand-overline">PDV ESPETINHOS</span>
+            <span className="brand-overline">CLOUDPDV</span>
             <h1>Uma operação mais clara, acolhedora e eficiente.</h1>
             <p>Comandas, fila, estoque e caixa organizados em um só lugar.</p>
             <div className="login-highlights" aria-label="Recursos principais">

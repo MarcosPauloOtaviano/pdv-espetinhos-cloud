@@ -1,7 +1,7 @@
 {
-  "name": "PDV Espetinhos",
-  "short_name": "Espetinhos",
-  "description": "Sistema de comandas, estoque e caixa em nuvem",
+  "name": "CloudPDV",
+  "short_name": "CloudPDV",
+  "description": "PDV em nuvem para comandas, estoque, caixa e relatórios",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
