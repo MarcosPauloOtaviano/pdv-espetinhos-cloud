@@ -23,6 +23,33 @@ function normalizeUsername(value: unknown) {
     .replace(/[^a-z0-9_.-]/g, "");
 }
 
+function isUuid(value: unknown) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+async function clearUserReferences(adminClient: ReturnType<typeof createClient>, userId: string) {
+  const references = [
+    ["settings", "updated_by"],
+    ["categories", "created_by"],
+    ["products", "created_by"],
+    ["cash_sessions", "closed_by"],
+    ["commands", "created_by"],
+    ["commands", "closed_by"],
+    ["command_items", "created_by"],
+    ["payments", "created_by"],
+    ["cash_movements", "created_by"],
+    ["audit_logs", "user_id"],
+    ["service_queue", "claimed_by"],
+    ["service_queue", "completed_by"],
+    ["establishments", "created_by"],
+  ] as const;
+
+  for (const [table, column] of references) {
+    const { error } = await adminClient.from(table).update({ [column]: null }).eq(column, userId);
+    if (error) throw new Error(`Nao foi possivel preservar o historico antes da exclusao (${table}.${column}).`);
+  }
+}
+
 serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -60,6 +87,62 @@ serve(async (request) => {
   const isSuperAdmin = caller?.platform_role === "super_admin";
   if (!caller?.active || (caller.role !== "admin" && !isSuperAdmin)) {
     return json({ error: "Somente admin pode criar ou atualizar usuarios." }, 403);
+  }
+
+  if (body.action === "delete_inactive") {
+    const targetId = String(body.user_id || body.userId || "").trim();
+    if (!isUuid(targetId)) return json({ error: "Usuario invalido para exclusao." }, 400);
+    if (targetId === authData.user.id) return json({ error: "O proprio usuario nao pode ser excluido." }, 400);
+
+    const { data: target, error: targetError } = await adminClient
+      .from("profiles")
+      .select("id, username, full_name, role, active, establishment_id, platform_role")
+      .eq("id", targetId)
+      .maybeSingle();
+    if (targetError) return json({ error: targetError.message }, 500);
+    if (!target) return json({ error: "Usuario nao encontrado." }, 404);
+    if (target.active) return json({ error: "Somente usuarios inativos podem ser excluidos." }, 409);
+    if (target.platform_role === "super_admin") return json({ error: "O Super Admin nao pode ser excluido por esta tela." }, 403);
+    if (target.establishment_id !== caller.establishment_id) {
+      return json({ error: "O usuario pertence a outro estabelecimento." }, 403);
+    }
+
+    const { data: openedCash, error: cashError } = await adminClient
+      .from("cash_sessions")
+      .select("id")
+      .eq("opened_by", targetId)
+      .limit(1);
+    if (cashError) return json({ error: cashError.message }, 500);
+    if (openedCash?.length) {
+      return json({ error: "Este usuario possui historico de abertura de caixa e deve permanecer apenas inativo." }, 409);
+    }
+
+    let auditId: number | null = null;
+    try {
+      const { data: audit, error: auditError } = await adminClient
+        .from("audit_logs")
+        .insert({
+          establishment_id: target.establishment_id,
+          user_id: authData.user.id,
+          action: "user_deleted",
+          entity: "profiles",
+          entity_id: target.id,
+          old_value: target,
+          new_value: { reason: "inactive_user_cleanup" },
+        })
+        .select("id")
+        .single();
+      if (auditError) throw new Error(auditError.message);
+      auditId = audit.id;
+      await clearUserReferences(adminClient, targetId);
+      const { error: deleteError } = await adminClient.auth.admin.deleteUser(targetId);
+      if (deleteError) throw new Error(deleteError.message);
+    } catch (error) {
+      if (auditId !== null) await adminClient.from("audit_logs").delete().eq("id", auditId);
+      return json({ error: error instanceof Error ? error.message : "Nao foi possivel excluir o usuario." }, 500);
+    }
+
+    return json({ mode: "deleted", profile: { id: target.id, username: target.username, establishment_id: target.establishment_id } });
   }
 
   const requestedEstablishmentId = String(body.establishment_id || "").trim();

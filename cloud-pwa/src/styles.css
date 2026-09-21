@@ -755,6 +755,12 @@ small {
   border-color: var(--red);
 }
 
+.toast.warning {
+  color: #8a5a00;
+  border-color: #d6a33b;
+  background: #fff8e5;
+}
+
 .offline-dot {
   bottom: 14px;
   color: var(--danger);

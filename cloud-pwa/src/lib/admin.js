@@ -31,3 +31,12 @@ export function inventoryValue(products) {
     return total + Number(product.cost || 0) * Number(product.stock_quantity || 0);
   }, 0);
 }
+
+export function canDeleteInactiveUser(target, caller) {
+  if (!target || !caller) return false;
+  if (target.active || !caller.active) return false;
+  if (target.id === caller.id) return false;
+  if (target.platform_role === "super_admin") return false;
+  if (target.establishment_id !== caller.establishment_id) return false;
+  return caller.role === "admin" || caller.platform_role === "super_admin";
+}

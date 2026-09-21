@@ -19,7 +19,8 @@ import {
   todayISO,
 } from "./lib/format";
 import { buildPixPayload, pixQrDataUrl } from "./lib/pix";
-import { commandOwner, filterProducts, inventoryValue, isLowStock } from "./lib/admin";
+import { canDeleteInactiveUser, commandOwner, filterProducts, inventoryValue, isLowStock } from "./lib/admin";
+import { runMutationWithRefresh } from "./lib/operations";
 import CustomerAccess from './CustomerAccess';
 
 const REALTIME_TABLES = [
@@ -488,9 +489,12 @@ function App() {
   async function run(action, successMessage) {
     setBusy(true);
     try {
-      const result = await action();
-      await refreshAll();
-      if (successMessage) show(successMessage, "success");
+      const { result, refreshError } = await runMutationWithRefresh(action, refreshAll);
+      if (refreshError) {
+        show("Alteração salva, mas a tela não conseguiu sincronizar. Atualize novamente.", "warning");
+      } else if (successMessage) {
+        show(successMessage, "success");
+      }
       return result;
     } catch (error) {
       show(error.message, "error");
@@ -601,6 +605,7 @@ function App() {
           <SettingsPanel
             settings={settings}
             profiles={profiles}
+            currentProfile={profile}
             establishment={profile.establishments}
             establishmentId={profile.establishment_id}
             run={run}
@@ -1340,7 +1345,7 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
 
   async function addMovement(event) {
     event.preventDefault();
-    await run(
+    const saved = await run(
       () =>
         unwrap(
           supabase.rpc("add_cash_movement", {
@@ -1349,12 +1354,14 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
             p_amount: parseCurrency(movementAmount),
             p_reason: movementReason,
           })
-        ),
+      ),
       "Movimento registrado"
     );
-    setMovementAmount("");
-    setMovementReason("");
-    await loadSummary();
+    if (saved !== null) {
+      setMovementAmount("");
+      setMovementReason("");
+      await loadSummary();
+    }
   }
 
   async function closeCash() {
@@ -1606,15 +1613,21 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
       notes: form.notes || null,
       active: Boolean(form.active),
     };
-    await run(
-      () =>
-        editing
-          ? unwrap(supabase.from("products").update(payload).eq("id", editing))
-          : unwrap(supabase.from("products").insert(payload)),
+    const saved = await run(
+      async () => {
+        if (editing) {
+          await unwrap(supabase.from("products").update(payload).eq("id", editing));
+        } else {
+          await unwrap(supabase.from("products").insert(payload));
+        }
+        return true;
+      },
       editing ? "Produto atualizado" : "Produto criado"
     );
-    setEditing(null);
-    setForm(EMPTY_FORM);
+    if (saved !== null) {
+      setEditing(null);
+      setForm(EMPTY_FORM);
+    }
   }
 
   async function createCategory(event) {
@@ -1622,7 +1635,10 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
     const name = categoryName.trim();
     if (!name) return;
     const result = await run(
-      () => unwrap(supabase.from("categories").insert({ name })),
+      async () => {
+        await unwrap(supabase.from("categories").insert({ name }));
+        return true;
+      },
       "Categoria criada"
     );
     if (result !== null) setCategoryName("");
@@ -1856,7 +1872,10 @@ function PlatformPanel({ establishments, run }) {
     const cleanName = name.trim();
     if (!cleanName) return;
     const created = await run(
-      () => unwrap(supabase.from("establishments").insert({ name: cleanName, slug: slugify(cleanName) })),
+      async () => {
+        await unwrap(supabase.from("establishments").insert({ name: cleanName, slug: slugify(cleanName) }));
+        return true;
+      },
       "Estabelecimento criado"
     );
     if (created !== null) setName("");
@@ -1931,9 +1950,10 @@ function PlatformPanel({ establishments, run }) {
   );
 }
 
-function SettingsPanel({ settings, profiles, establishment, establishmentId, run, show }) {
+function SettingsPanel({ settings, profiles, currentProfile, establishment, establishmentId, run, show }) {
   const [values, setValues] = useState({});
   const [userForm, setUserForm] = useState(DEFAULT_USER_FORM);
+  const [deletingUserId, setDeletingUserId] = useState(null);
 
   useEffect(() => {
     setValues(Object.fromEntries(settings.map((item) => [item.key, item.value || ""])));
@@ -2001,6 +2021,26 @@ function SettingsPanel({ settings, profiles, establishment, establishmentId, run
     }, "Usuario salvo");
 
     if (saved !== null) setUserForm(DEFAULT_USER_FORM);
+  }
+
+  async function deleteInactiveUser(item) {
+    if (!canDeleteInactiveUser(item, currentProfile)) {
+      show("Somente usuários inativos do seu estabelecimento podem ser excluídos.", "error");
+      return;
+    }
+    if (!window.confirm(`Excluir o usuário inativo ${item.username}? Essa ação remove o acesso e não pode ser desfeita.`)) return;
+    setDeletingUserId(item.id);
+    try {
+      await run(async () => {
+        const { data, error } = await supabase.functions.invoke("admin-upsert-user", {
+          body: { action: "delete_inactive", user_id: item.id },
+        });
+        if (error) throw error;
+        return data;
+      }, "Usuário inativo excluído");
+    } finally {
+      setDeletingUserId(null);
+    }
   }
 
   return (
@@ -2105,6 +2145,16 @@ function SettingsPanel({ settings, profiles, establishment, establishmentId, run
                 <option value="active">Ativo</option>
                 <option value="inactive">Inativo</option>
               </select>
+              {!item.active && canDeleteInactiveUser(item, currentProfile) && (
+                <button
+                  type="button"
+                  className="danger small"
+                  disabled={deletingUserId === item.id}
+                  onClick={() => deleteInactiveUser(item)}
+                >
+                  {deletingUserId === item.id ? "Excluindo…" : "Excluir usuário"}
+                </button>
+              )}
             </div>
           ))}
         </div>

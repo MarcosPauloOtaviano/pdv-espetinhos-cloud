@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { commandOwner, filterProducts, inventoryValue, isLowStock } from "./admin.js";
+import { canDeleteInactiveUser, commandOwner, filterProducts, inventoryValue, isLowStock } from "./admin.js";
 
 const products = [
   {
@@ -44,4 +44,13 @@ test("calcula alerta e valor apenas do estoque ativo controlado", () => {
   assert.equal(isLowStock(products[0]), true);
   assert.equal(isLowStock(products[1]), false);
   assert.equal(inventoryValue(products), 12);
+});
+
+test("permite excluir somente usuário inativo do mesmo estabelecimento", () => {
+  const caller = { id: "admin-1", role: "admin", platform_role: "member", establishment_id: "est-1", active: true };
+  assert.equal(canDeleteInactiveUser({ id: "user-1", active: false, platform_role: "member", establishment_id: "est-1" }, caller), true);
+  assert.equal(canDeleteInactiveUser({ id: "user-1", active: true, platform_role: "member", establishment_id: "est-1" }, caller), false);
+  assert.equal(canDeleteInactiveUser({ id: "admin-1", active: false, platform_role: "member", establishment_id: "est-1" }, caller), false);
+  assert.equal(canDeleteInactiveUser({ id: "user-1", active: false, platform_role: "super_admin", establishment_id: "est-1" }, caller), false);
+  assert.equal(canDeleteInactiveUser({ id: "user-1", active: false, platform_role: "member", establishment_id: "est-2" }, caller), false);
 });
