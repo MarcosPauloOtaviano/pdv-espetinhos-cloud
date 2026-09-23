@@ -21,6 +21,7 @@ import {
 } from "./lib/format";
 import { buildPixPayload, pixQrDataUrl } from "./lib/pix";
 import { canDeleteInactiveUser, commandOwner, filterProducts, inventoryValue, isLowStock } from "./lib/admin";
+import { groupProductsByCategory } from "./lib/catalog";
 import { runMutationWithRefresh } from "./lib/operations";
 import CustomerAccess from './CustomerAccess';
 
@@ -940,6 +941,11 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
     const matchesCategory = !categoryId || product.category_id === categoryId;
     return active && matchesSearch && matchesCategory;
   });
+  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+  const groupedProducts = groupProductsByCategory(
+    filteredProducts,
+    (product) => categoryNames.get(product.category_id) || "Outros"
+  );
 
   async function saveInfo() {
     await run(
@@ -1142,8 +1148,15 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
               ))}
             </select>
           </div>
-          <div className="product-list">
-            {filteredProducts.map((product) => {
+          <div className="catalog-groups">
+            {groupedProducts.map((group) => (
+              <section className="catalog-group" key={group.name}>
+                <div className="catalog-group-heading">
+                  <h3>{group.name}</h3>
+                  <span>{group.items.length} {group.items.length === 1 ? "produto" : "produtos"}</span>
+                </div>
+                <div className="product-list">
+            {group.items.map((product) => {
               const quantity = productQuantity(product.id);
               return (
                 <article key={product.id} className="product-pick">
@@ -1179,6 +1192,10 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
                 </article>
               );
             })}
+                </div>
+              </section>
+            ))}
+            {!groupedProducts.length && <div className="empty">Nenhum produto encontrado.</div>}
           </div>
         </div>
       </div>

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { supabaseUrl, supabasePublishableKey } from './lib/supabase';
 import { currency } from './lib/format';
+import { groupProductsByCategory } from './lib/catalog';
 
 // Do not reuse a staff JWT, even when the attendant previews the customer link.
 const customerClient = supabaseUrl && supabasePublishableKey ? createClient(supabaseUrl, supabasePublishableKey, {
@@ -57,6 +58,9 @@ export default function CustomerApp({ token }) {
 
   const products = data?.products || [];
   const categories = [...new Set(products.map((p) => p.category || 'Outros'))];
+  const filteredMenuProducts = products.filter((p) => (!category || (p.category || 'Outros') === category) && p.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+  const groupedMenuProducts = groupProductsByCategory(filteredMenuProducts, (product) => product.category || 'Outros');
+  const groupedEditProducts = groupProductsByCategory(products, (product) => product.category || 'Outros');
   const selected = Object.entries(cart).filter(([, item]) => item.quantity > 0);
   const cartTotal = selected.reduce((sum, [id, item]) => sum + Number(products.find((p) => p.id === id)?.price || 0) * item.quantity, 0);
   const editSelected = Object.entries(editCart).filter(([, item]) => item.quantity > 0);
@@ -180,28 +184,33 @@ export default function CustomerApp({ token }) {
     {editingRequestId && editable && <section className="panel customer-request-editor">
       <div className="row"><div><span className="eyebrow">Editar pedido pendente</span><h2>Altere antes do aceite da cozinha</h2></div><button className="neutral small" disabled={busy} onClick={() => { setEditingRequestId(null); setEditCart({}); }}>Fechar</button></div>
       <p>Após o aceite, os itens ficam protegidos e qualquer correção precisa ser feita pelo administrador.</p>
-      <div className="customer-menu">{products.map((p) => {
+      <div className="customer-catalog-groups">{groupedEditProducts.map((group) => <section className="customer-catalog-group" key={group.name}>
+        <div className="catalog-group-heading"><h3>{group.name}</h3><span>{group.items.length} {group.items.length === 1 ? 'produto' : 'produtos'}</span></div>
+        <div className="customer-menu">{group.items.map((p) => {
         const count = editCart[p.id]?.quantity || 0;
         return <article className="customer-product" key={p.id}><div><small>{p.category || 'Da casa'}</small><h3>{p.name}</h3><strong>{currency(p.price)}</strong></div>
           <div className="qty"><button aria-label={`Diminuir ${p.name}`} disabled={busy || !count} onClick={() => changeEditItem(p.id, count - 1)}>−</button><span aria-live="polite">{count}</span><button aria-label={`Adicionar ${p.name}`} disabled={busy || !p.available || count >= 50} onClick={() => changeEditItem(p.id, count + 1)}>+</button></div>
           {!p.available && <small>Indisponível no momento</small>}
           {count > 0 && <input maxLength="300" disabled={busy} aria-label={`Observação para ${p.name}`} placeholder="Observação: sem cebola, por exemplo" value={editCart[p.id]?.notes || ''} onChange={(e) => setEditCart((current) => ({ ...current, [p.id]: { ...current[p.id], notes: e.target.value } }))} />}
         </article>;
-      })}</div>
+      })}</div></section>)}</div>
       <div className="button-row"><button className="primary" disabled={busy || !editSelected.length} onClick={() => changeRequest('edit')}>Salvar pedido · {currency(editCartTotal)}</button>
         <button className="danger" disabled={busy} onClick={() => changeRequest('cancel')}>Cancelar este pedido</button></div>
     </section>}
     {editable && <section className="panel"><span className="eyebrow">Mais um pedido?</span><h2>Cardápio da casa</h2>
       <div className="form-grid"><input aria-label="Buscar no cardápio" placeholder="O que você gostaria de pedir?" value={search} onChange={(e) => setSearch(e.target.value)} />
         <select aria-label="Categoria do cardápio" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">Todas as categorias</option>{categories.map((name) => <option key={name}>{name}</option>)}</select></div>
-      <div className="customer-menu">{products.filter((p) => (!category || (p.category || 'Outros') === category) && p.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map((p) => {
+      <div className="customer-catalog-groups">{groupedMenuProducts.map((group) => <section className="customer-catalog-group" key={group.name}>
+        <div className="catalog-group-heading"><h3>{group.name}</h3><span>{group.items.length} {group.items.length === 1 ? 'produto' : 'produtos'}</span></div>
+        <div className="customer-menu">{group.items.map((p) => {
         const count = cart[p.id]?.quantity || 0;
         return <article className="customer-product" key={p.id}><div><small>{p.category || 'Da casa'}</small><h3>{p.name}</h3><strong>{currency(p.price)}</strong></div>
           <div className="qty"><button aria-label={`Diminuir ${p.name}`} disabled={busy || !count} onClick={() => changeItem(p.id, count - 1)}>−</button><span aria-live="polite">{count}</span><button aria-label={`Adicionar ${p.name}`} disabled={busy || !p.available || count >= 50} onClick={() => changeItem(p.id, count + 1)}>+</button></div>
           {!p.available && <small>Indisponível no momento</small>}
           {count > 0 && <input maxLength="300" disabled={busy} aria-label={`Observação para ${p.name}`} placeholder="Observação: sem cebola, por exemplo" value={cart[p.id]?.notes || ''} onChange={(e) => setCart((current) => ({ ...current, [p.id]: { ...current[p.id], notes: e.target.value } }))} />}
         </article>;
-      })}</div>
+      })}</div></section>)}</div>
+      {!groupedMenuProducts.length && products.length > 0 && <p>Nenhum produto encontrado para este filtro.</p>}
       {!products.length && <p>O cardápio está sendo preparado. Chame o atendente para fazer seu pedido.</p>}
     </section>}
     {editable && selected.length > 0 && <section className="customer-cart" aria-label="Novo pedido"><div><strong>Novo pedido · {currency(cartTotal)}</strong><small>{selected.reduce((sum, [, item]) => sum + item.quantity, 0)} item(ns) selecionado(s)</small></div><button className="primary" disabled={busy} onClick={() => submit('pedido_digital')}>{busy ? 'Enviando…' : 'Enviar pedido'}</button></section>}

@@ -549,6 +549,45 @@ small {
   gap: 10px;
 }
 
+.catalog-groups,
+.customer-catalog-groups {
+  display: grid;
+  gap: 22px;
+  margin-top: 18px;
+}
+
+.catalog-group,
+.customer-catalog-group {
+  display: grid;
+  gap: 10px;
+}
+
+.catalog-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.catalog-group-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.catalog-group-heading span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.customer-catalog-group .customer-menu {
+  margin-top: 0;
+}
+
 .quantity-stepper {
   display: grid;
   grid-template-columns: 38px 62px 38px;
