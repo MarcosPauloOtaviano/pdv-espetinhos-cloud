@@ -42,6 +42,12 @@ export function parseCurrency(input) {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
 }
 
+export function normalizeOrderQuantity(value, maximum = 999) {
+  const parsed = Number(String(value ?? "").replace(",", "."));
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(maximum, Math.max(1, Math.floor(parsed)));
+}
+
 export function todayISO() {
   const now = new Date();
   const offset = now.getTimezoneOffset();

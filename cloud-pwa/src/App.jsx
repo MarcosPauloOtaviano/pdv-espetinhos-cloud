@@ -15,6 +15,7 @@ import {
   ROLE_LABELS,
   currency,
   dateTime,
+  normalizeOrderQuantity,
   parseCurrency,
   todayISO,
 } from "./lib/format";
@@ -922,12 +923,14 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
   const [paymentMode, setPaymentMode] = useState(null);
   const [adjustingItem, setAdjustingItem] = useState(null);
   const [cancelReasonOpen, setCancelReasonOpen] = useState(false);
+  const [productQuantities, setProductQuantities] = useState({});
 
   useEffect(() => {
     setCustomer(command.customer_name || "");
     setTableRef(command.table_ref || "");
     setNotes(command.notes || "");
     setDiscount(String(command.discount || "0"));
+    setProductQuantities({});
   }, [command.id, command.customer_name, command.table_ref, command.notes, command.discount]);
 
   const editable = canOrders && ["aberto", "aguardando_pagamento"].includes(command.status);
@@ -953,19 +956,32 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
     );
   }
 
-  async function addProduct(productId) {
-    await run(
+  function productQuantity(productId) {
+    return normalizeOrderQuantity(productQuantities[productId] ?? 1);
+  }
+
+  function setProductQuantity(productId, value) {
+    setProductQuantities((current) => ({
+      ...current,
+      [productId]: normalizeOrderQuantity(value),
+    }));
+  }
+
+  async function addProduct(product) {
+    const quantity = productQuantity(product.id);
+    const result = await run(
       () =>
         unwrap(
           supabase.rpc("add_command_item", {
             p_command_id: command.id,
-            p_product_id: productId,
-            p_quantity: 1,
+            p_product_id: product.id,
+            p_quantity: quantity,
             p_notes: "",
           })
         ),
-      "Item adicionado"
+      `Produto adicionado: ${quantity} × ${product.name}`
     );
+    if (result !== null) setProductQuantity(product.id, 1);
   }
 
   async function applyDiscount() {
@@ -1127,13 +1143,42 @@ function CommandDetail({ command, profiles, products, categories, settings, canM
             </select>
           </div>
           <div className="product-list">
-            {filteredProducts.map((product) => (
-              <button key={product.id} className="product-pick" disabled={!editable} onClick={() => addProduct(product.id)}>
-                <span>{product.name}</span>
-                <strong>{currency(product.price)}</strong>
-                {product.track_stock && <small>Estoque: {Number(product.stock_quantity).toLocaleString("pt-BR")}</small>}
-              </button>
-            ))}
+            {filteredProducts.map((product) => {
+              const quantity = productQuantity(product.id);
+              return (
+                <article key={product.id} className="product-pick">
+                  <div className="product-pick-info">
+                    <strong>{product.name}</strong>
+                    <span>{currency(product.price)}</span>
+                    <small>{product.track_stock ? `Estoque: ${Number(product.stock_quantity).toLocaleString("pt-BR")}` : "Disponibilidade contínua"}</small>
+                  </div>
+                  <div className="product-pick-action">
+                    <div className="quantity-stepper" aria-label={`Quantidade de ${product.name}`}>
+                      <button type="button" aria-label={`Diminuir quantidade de ${product.name}`} disabled={!editable || busy || quantity <= 1} onClick={() => setProductQuantity(product.id, quantity - 1)}>−</button>
+                      <input
+                        type="number"
+                        min="1"
+                        max="999"
+                        step="1"
+                        inputMode="numeric"
+                        aria-label={`Quantidade de ${product.name}`}
+                        value={quantity}
+                        disabled={!editable || busy}
+                        onChange={(event) => setProductQuantity(product.id, event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            addProduct(product);
+                          }
+                        }}
+                      />
+                      <button type="button" aria-label={`Aumentar quantidade de ${product.name}`} disabled={!editable || busy || quantity >= 999} onClick={() => setProductQuantity(product.id, quantity + 1)}>+</button>
+                    </div>
+                    <button type="button" className="primary product-add-button" disabled={!editable || busy} onClick={() => addProduct(product)}>Adicionar</button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </div>
       </div>

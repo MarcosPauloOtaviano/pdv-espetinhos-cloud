@@ -517,12 +517,84 @@ small {
 .product-pick {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
   text-align: left;
 }
 
 .product-pick small {
   grid-column: 1 / -1;
   color: var(--muted);
+}
+
+.product-pick-info {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.product-pick-info > strong {
+  overflow-wrap: anywhere;
+}
+
+.product-pick-info > span {
+  color: var(--orange-2);
+  font-weight: 800;
+}
+
+.product-pick-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.quantity-stepper {
+  display: grid;
+  grid-template-columns: 38px 62px 38px;
+  align-items: stretch;
+}
+
+.quantity-stepper button,
+.quantity-stepper input {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.quantity-stepper button {
+  padding: 0;
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.quantity-stepper button:first-child {
+  border-radius: 10px 0 0 10px;
+}
+
+.quantity-stepper button:last-child {
+  border-radius: 0 10px 10px 0;
+}
+
+.quantity-stepper input {
+  width: 62px;
+  padding: 6px;
+  border-inline: 0;
+  border-radius: 0;
+  text-align: center;
+  font-weight: 800;
+  appearance: textfield;
+}
+
+.quantity-stepper input::-webkit-inner-spin-button,
+.quantity-stepper input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.product-add-button {
+  min-width: 102px;
 }
 
 .total-box {
@@ -1594,6 +1666,22 @@ small {
 
   .panel {
     padding: 16px;
+  }
+
+  .product-pick {
+    grid-template-columns: 1fr;
+  }
+
+  .product-pick-action {
+    justify-content: stretch;
+  }
+
+  .quantity-stepper {
+    flex: 0 0 auto;
+  }
+
+  .product-add-button {
+    flex: 1;
   }
 
   .dashboard-period-note {
