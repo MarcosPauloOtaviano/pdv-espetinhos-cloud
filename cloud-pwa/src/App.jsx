@@ -21,6 +21,7 @@ import {
 } from "./lib/format";
 import { buildPixPayload, pixQrDataUrl } from "./lib/pix";
 import { canDeleteInactiveUser, commandOwner, filterProducts, inventoryValue, isLowStock } from "./lib/admin";
+import { defaultViewForRole, realtimeTablesForRole, roleCanAccessView } from "./lib/access";
 import { groupProductsByCategory } from "./lib/catalog";
 import { runMutationWithRefresh } from "./lib/operations";
 import CustomerAccess from './CustomerAccess';
@@ -206,15 +207,18 @@ function App() {
   const canOrders = roleCanEditOrders(profile?.role);
   const canQueue = roleCanManageQueue(profile?.role);
   const isSuperAdmin = profile?.platform_role === "super_admin";
+  const isKitchen = profile?.role === "cozinha";
+  const activeView = defaultViewForRole(profile?.role, view);
   const pendingQueueCount = serviceQueue.filter((item) => item.status === "pendente").length;
 
   const navigate = useCallback((nextView) => {
+    if (!roleCanAccessView(profile?.role, nextView)) return;
     setView(nextView);
     setSelectedCommandId(null);
     setMobileMenuOpen(false);
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" }));
-  }, []);
+  }, [profile?.role]);
 
   useEffect(() => {
     if (!mobileMenuOpen) return undefined;
@@ -312,11 +316,18 @@ function App() {
     const meta = queueMeta(request.request_type);
     let place = "";
     if (request.command_id) {
-      const { data: command } = await supabase
-        .from("commands")
-        .select("number, customer_name, table_ref")
-        .eq("id", request.command_id)
-        .maybeSingle();
+      let command = null;
+      if (isKitchen) {
+        const { data: kitchenQueue } = await supabase.rpc("get_kitchen_queue");
+        command = kitchenQueue?.find((item) => item.id === request.id)?.commands || null;
+      } else {
+        const { data } = await supabase
+          .from("commands")
+          .select("number, customer_name, table_ref")
+          .eq("id", request.command_id)
+          .maybeSingle();
+        command = data;
+      }
       if (command) {
         const table = command.table_ref ? `Mesa ${command.table_ref}` : `Comanda #${String(command.number || 0).padStart(4, "0")}`;
         place = `${table}${command.customer_name ? ` · ${command.customer_name}` : ""}`;
@@ -325,12 +336,28 @@ function App() {
     const systemNotificationShown = await showSystemNotification(request, place, meta);
     if (!systemNotificationShown && soundEnabled) playQueueSound(request.request_type);
     show(`${meta.icon} ${place ? `${place} · ` : ""}${meta.label}`, `queue-${meta.tone}`);
-  }, [playQueueSound, show, showSystemNotification, soundEnabled]);
+  }, [isKitchen, playQueueSound, show, showSystemNotification, soundEnabled]);
 
   const refreshAll = useCallback(async () => {
     if (!supabase || !session) return;
+    const currentProfileData = await getProfile(session.user.id);
+    setProfile(currentProfileData || null);
+
+    if (currentProfileData?.role === "cozinha") {
+      const queueData = await unwrap(supabase.rpc("get_kitchen_queue"));
+      setSettings([]);
+      setCategories([]);
+      setProducts([]);
+      setCommands([]);
+      setCashSession(null);
+      setDashboard(null);
+      setProfiles([]);
+      setServiceQueue(Array.isArray(queueData) ? queueData : []);
+      setEstablishments([]);
+      return;
+    }
+
     const [
-      currentProfileData,
       settingsData,
       categoriesData,
       productsData,
@@ -341,7 +368,6 @@ function App() {
       queueData,
       establishmentsData,
     ] = await Promise.all([
-      getProfile(session.user.id),
       unwrap(supabase.from("settings").select("*").order("key")),
       unwrap(supabase.from("categories").select("*").order("name")),
       unwrap(supabase.from("products").select("*, categories(name)").order("name")),
@@ -365,7 +391,6 @@ function App() {
       ),
       unwrap(supabase.from("establishments").select("*").order("name")),
     ]);
-    setProfile(currentProfileData || null);
     setSettings(settingsData || []);
     setCategories(categoriesData || []);
     setProducts(productsData || []);
@@ -472,7 +497,7 @@ function App() {
   // business date. Refresh at the next local midnight so an open dashboard
   // rolls over to zero without requiring a manual reload.
   useEffect(() => {
-    if (!session) return undefined;
+    if (!session || isKitchen) return undefined;
     let timer;
     const scheduleMidnightRefresh = () => {
       const now = new Date();
@@ -485,13 +510,13 @@ function App() {
     };
     scheduleMidnightRefresh();
     return () => clearTimeout(timer);
-  }, [session, refreshAll, show]);
+  }, [session, isKitchen, refreshAll, show]);
 
   useEffect(() => {
     if (!session || !supabase) return undefined;
     if (!profile?.establishment_id) return undefined;
     const channel = supabase.channel(`pdv-sync-${profile.establishment_id}`);
-    REALTIME_TABLES.forEach((table) => {
+    realtimeTablesForRole(profile.role, REALTIME_TABLES).forEach((table) => {
       channel.on(
         "postgres_changes",
         {
@@ -520,7 +545,7 @@ function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [session, profile?.establishment_id, scheduleRefresh, show, notifyQueueRequest]);
+  }, [session, profile?.establishment_id, profile?.role, scheduleRefresh, show, notifyQueueRequest]);
 
   const selectedCommand = useMemo(
     () => commands.find((command) => command.id === selectedCommandId),
@@ -560,24 +585,30 @@ function App() {
           <div className="brand">{profile.establishments?.name || "CloudPDV"}</div>
         </div>
         <nav className="nav-list" aria-label="Navegação principal">
-          <NavButton view={view} id="dashboard" icon="dashboard" label="Painel" onNavigate={navigate} />
-          <NavButton view={view} id="commands" icon="commands" label="Comandas" onNavigate={navigate} />
-          {canQueue && <NavButton view={view} id="queue" icon="queue" label="Fila" badge={pendingQueueCount} onNavigate={navigate} />}
-          <NavButton view={view} id="cash" icon="cash" label="Caixa" onNavigate={navigate} />
-          <NavButton className="nav-secondary" view={view} id="products" icon="products" label="Estoque" onNavigate={navigate} />
-          {canAdmin && <NavButton className="nav-secondary" view={view} id="reports" icon="reports" label="Relatórios" onNavigate={navigate} />}
-          {canAdmin && <NavButton className="nav-secondary" view={view} id="settings" icon="settings" label="Administração" onNavigate={navigate} />}
-          {isSuperAdmin && <NavButton className="nav-secondary" view={view} id="platform" icon="platform" label="Plataforma" onNavigate={navigate} />}
-          <button
-            type="button"
-            className={`nav mobile-more-trigger ${["products", "reports", "settings", "platform"].includes(view) ? "active" : ""}`}
-            aria-haspopup="dialog"
-            aria-expanded={mobileMenuOpen}
-            onClick={() => setMobileMenuOpen(true)}
-          >
-            <AppIcon name="more" />
-            <span className="nav-label">Mais</span>
-          </button>
+          {isKitchen ? (
+            <NavButton view={activeView} id="queue" icon="queue" label="Pedidos" badge={pendingQueueCount} onNavigate={navigate} />
+          ) : (
+            <>
+              <NavButton view={activeView} id="dashboard" icon="dashboard" label="Painel" onNavigate={navigate} />
+              <NavButton view={activeView} id="commands" icon="commands" label="Comandas" onNavigate={navigate} />
+              {canQueue && <NavButton view={activeView} id="queue" icon="queue" label="Fila" badge={pendingQueueCount} onNavigate={navigate} />}
+              <NavButton view={activeView} id="cash" icon="cash" label="Caixa" onNavigate={navigate} />
+              <NavButton className="nav-secondary" view={activeView} id="products" icon="products" label="Estoque" onNavigate={navigate} />
+              {canAdmin && <NavButton className="nav-secondary" view={activeView} id="reports" icon="reports" label="Relatórios" onNavigate={navigate} />}
+              {canAdmin && <NavButton className="nav-secondary" view={activeView} id="settings" icon="settings" label="Administração" onNavigate={navigate} />}
+              {isSuperAdmin && <NavButton className="nav-secondary" view={activeView} id="platform" icon="platform" label="Plataforma" onNavigate={navigate} />}
+              <button
+                type="button"
+                className={`nav mobile-more-trigger ${["products", "reports", "settings", "platform"].includes(activeView) ? "active" : ""}`}
+                aria-haspopup="dialog"
+                aria-expanded={mobileMenuOpen}
+                onClick={() => setMobileMenuOpen(true)}
+              >
+                <AppIcon name="more" />
+                <span className="nav-label">Mais</span>
+              </button>
+            </>
+          )}
         </nav>
         <div className="account-area">
           <div className="userline">
@@ -600,10 +631,11 @@ function App() {
 
       {mobileMenuOpen && (
         <MobileMenu
-          view={view}
+          view={activeView}
           profile={profile}
           canAdmin={canAdmin}
           isSuperAdmin={isSuperAdmin}
+          isKitchen={isKitchen}
           soundActive={notificationPermission === "granted" || soundEnabled}
           onNavigate={navigate}
           onEnableSound={enableSound}
@@ -616,8 +648,8 @@ function App() {
         <button className={`sound-toggle ${notificationPermission === "granted" || soundEnabled ? "enabled" : ""}`} onClick={enableSound}>
           {notificationPermission === "granted" ? "Notificações do celular ativas" : soundEnabled ? "Fallback sonoro ativo" : "Ativar som do celular"}
         </button>
-        <div className="view-stage" key={`${view}-${selectedCommandId || "root"}`}>
-        {view === "dashboard" && (
+        <div className="view-stage" key={`${activeView}-${selectedCommandId || "root"}`}>
+        {activeView === "dashboard" && !isKitchen && (
           <Dashboard
             data={dashboard}
             cashSession={cashSession}
@@ -629,7 +661,7 @@ function App() {
             queuePending={serviceQueue.filter((item) => item.status === "pendente").length}
           />
         )}
-        {view === "commands" && !selectedCommand && (
+        {activeView === "commands" && !isKitchen && !selectedCommand && (
           <CommandsList
             commands={commands}
             profiles={profiles}
@@ -638,7 +670,7 @@ function App() {
             run={run}
           />
         )}
-        {view === "commands" && selectedCommand && (
+        {activeView === "commands" && !isKitchen && selectedCommand && (
           <CommandDetail
             command={selectedCommand}
             profiles={profiles}
@@ -655,7 +687,7 @@ function App() {
             close={() => setSelectedCommandId(null)}
           />
         )}
-        {view === "cash" && (
+        {activeView === "cash" && !isKitchen && (
           <CashPanel
             cashSession={cashSession}
             canMoney={canMoney}
@@ -664,10 +696,10 @@ function App() {
             show={show}
           />
         )}
-        {view === "queue" && canQueue && (
-          <QueuePanel requests={serviceQueue} profiles={profiles} run={run} />
+        {activeView === "queue" && canQueue && (
+          <QueuePanel requests={serviceQueue} profiles={profiles} run={run} kitchenMode={isKitchen} />
         )}
-        {view === "products" && (
+        {activeView === "products" && !isKitchen && (
           <ProductsPanel
             products={products}
             categories={categories}
@@ -675,8 +707,8 @@ function App() {
             run={run}
           />
         )}
-        {view === "reports" && canAdmin && <ReportsPanel profiles={profiles} />}
-        {view === "settings" && canAdmin && (
+        {activeView === "reports" && !isKitchen && canAdmin && <ReportsPanel profiles={profiles} />}
+        {activeView === "settings" && !isKitchen && canAdmin && (
           <SettingsPanel
             settings={settings}
             profiles={profiles}
@@ -687,7 +719,7 @@ function App() {
             show={show}
           />
         )}
-        {view === "platform" && isSuperAdmin && (
+        {activeView === "platform" && !isKitchen && isSuperAdmin && (
           <PlatformPanel establishments={establishments} run={run} />
         )}
         </div>
@@ -867,12 +899,12 @@ function NavButton({ id, view, label, badge, icon, className = "", onNavigate })
   );
 }
 
-function MobileMenu({ view, profile, canAdmin, isSuperAdmin, soundActive, onNavigate, onEnableSound, onClose }) {
+function MobileMenu({ view, profile, canAdmin, isSuperAdmin, isKitchen, soundActive, onNavigate, onEnableSound, onClose }) {
   const destinations = [
-    { id: "products", label: "Estoque", detail: "Produtos e quantidades", icon: "products", visible: true },
-    { id: "reports", label: "Relatórios", detail: "Vendas e histórico", icon: "reports", visible: canAdmin },
-    { id: "settings", label: "Administração", detail: "Pix, visual e equipe", icon: "settings", visible: canAdmin },
-    { id: "platform", label: "Plataforma", detail: "Estabelecimentos", icon: "platform", visible: isSuperAdmin },
+    { id: "products", label: "Estoque", detail: "Produtos e quantidades", icon: "products", visible: !isKitchen },
+    { id: "reports", label: "Relatórios", detail: "Vendas e histórico", icon: "reports", visible: !isKitchen && canAdmin },
+    { id: "settings", label: "Administração", detail: "Pix, visual e equipe", icon: "settings", visible: !isKitchen && canAdmin },
+    { id: "platform", label: "Plataforma", detail: "Estabelecimentos", icon: "platform", visible: !isKitchen && isSuperAdmin },
   ].filter((item) => item.visible);
 
   return (
@@ -882,13 +914,13 @@ function MobileMenu({ view, profile, canAdmin, isSuperAdmin, soundActive, onNavi
         <div className="mobile-menu-handle" aria-hidden="true" />
         <div className="mobile-menu-head">
           <div>
-            <span className="eyebrow">Conta e gestão</span>
-            <h2 id="mobile-menu-title">Mais opções</h2>
+            <span className="eyebrow">{isKitchen ? "Conta da cozinha" : "Conta e gestão"}</span>
+            <h2 id="mobile-menu-title">{isKitchen ? "Opções" : "Mais opções"}</h2>
             <p>{profile.full_name || profile.username} · {ROLE_LABELS[profile.role] || profile.role}</p>
           </div>
           <button type="button" className="mobile-menu-close" aria-label="Fechar menu" autoFocus onClick={onClose}><AppIcon name="close" /></button>
         </div>
-        <div className="mobile-menu-grid">
+        {destinations.length > 0 && <div className="mobile-menu-grid">
           {destinations.map((item) => (
             <button
               type="button"
@@ -901,7 +933,7 @@ function MobileMenu({ view, profile, canAdmin, isSuperAdmin, soundActive, onNavi
               <span><strong>{item.label}</strong><small>{item.detail}</small></span>
             </button>
           ))}
-        </div>
+        </div>}
         <div className="mobile-menu-actions">
           <button type="button" className={`mobile-sound-action ${soundActive ? "active" : ""}`} onClick={onEnableSound}>
             <AppIcon name="sound" />
@@ -1713,11 +1745,14 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
   );
 }
 
-function QueuePanel({ requests, profiles, run }) {
+function QueuePanel({ requests, profiles, run, kitchenMode = false }) {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const pending = requests.filter((item) => item.status === "pendente");
-  const inProgress = requests.filter((item) => item.status === "em_atendimento");
+  const scopedRequests = kitchenMode
+    ? requests.filter((item) => item.request_type === "pedido_digital")
+    : requests;
+  const pending = scopedRequests.filter((item) => item.status === "pendente");
+  const inProgress = scopedRequests.filter((item) => item.status === "em_atendimento");
 
   const matches = (item) => {
     if (filter !== "all" && item.request_type !== filter) return false;
@@ -1738,27 +1773,28 @@ function QueuePanel({ requests, profiles, run }) {
   async function claimNext() {
     await run(
       () => unwrap(supabase.rpc("claim_next_service_request")),
-      "Próxima solicitação aceita e enviada para preparo"
+      kitchenMode ? "Pedido enviado para preparo" : "Próxima solicitação aceita e enviada para preparo"
     );
   }
 
   async function claimRequest(requestId) {
     await run(
       () => unwrap(supabase.rpc("claim_service_request", { p_request_id: requestId })),
-      "Solicitação aceita e enviada para preparo"
+      kitchenMode ? "Pedido enviado para preparo" : "Solicitação aceita e enviada para preparo"
     );
   }
 
   async function complete(requestId) {
     await run(
       () => unwrap(supabase.rpc("complete_service_request", { p_request_id: requestId })),
-      "Solicitacao concluida"
+      kitchenMode ? "Pedido marcado como pronto" : "Solicitacao concluida"
     );
   }
 
   function requestCard(item, index, active = false) {
     const command = item.commands || {};
     const claimedBy = profiles.find((profile) => profile.id === item.claimed_by);
+    const claimedName = item.claimed_by_name || claimedBy?.full_name || claimedBy?.username;
     const meta = queueMeta(item.request_type);
     return (
       <div className={`queue-card queue-card-${meta.tone} ${active ? "active" : ""}`} key={item.id}>
@@ -1769,10 +1805,12 @@ function QueuePanel({ requests, profiles, run }) {
           <small>Solicitado em {dateTime(item.requested_at)}</small>
           {item.payload?.source === 'customer' && <small>Solicitação pelo celular do cliente</small>}
           {item.payload?.items?.map((line) => <p key={line.id}>{line.quantity} × {line.name}{line.notes ? ` · ${line.notes}` : ''}</p>)}
-          {claimedBy && <small>Atendido por {claimedBy.full_name || claimedBy.username}</small>}
+          {claimedName && <small>{kitchenMode ? "Em preparo por" : "Atendido por"} {claimedName}</small>}
         </div>
         <div className="queue-card-actions">
-          {active ? <button className="success small" onClick={() => complete(item.id)}>Concluir</button> : <button className="primary small" onClick={() => claimRequest(item.id)}>Atender esta</button>}
+          {active
+            ? <button className="success small" onClick={() => complete(item.id)}>{kitchenMode ? "Marcar como pronto" : "Concluir"}</button>
+            : <button className="primary small" onClick={() => claimRequest(item.id)}>{kitchenMode ? "Iniciar preparo" : "Atender esta"}</button>}
         </div>
       </div>
     );
@@ -1780,44 +1818,53 @@ function QueuePanel({ requests, profiles, run }) {
 
   return (
     <section>
-      <Header title="Fila de atendimento" subtitle="Ordem FIFO: ao aceitar um pedido digital, ele entra em preparo e não pode mais ser alterado pelo cliente" />
+      <Header
+        title={kitchenMode ? "Pedidos da cozinha" : "Fila de atendimento"}
+        subtitle={kitchenMode
+          ? "Somente pedidos aguardando preparo ou em preparo"
+          : "Ordem FIFO: ao aceitar um pedido digital, ele entra em preparo e não pode mais ser alterado pelo cliente"}
+      />
       <div className="metric-grid inventory-metrics">
-        <Metric label="Aguardando" value={pending.length} tone={pending.length ? "bad" : "good"} />
-        <Metric label="Em atendimento" value={inProgress.length} />
+        <Metric label={kitchenMode ? "Aguardando preparo" : "Aguardando"} value={pending.length} tone={pending.length ? "bad" : "good"} />
+        <Metric label={kitchenMode ? "Em preparo" : "Em atendimento"} value={inProgress.length} />
       </div>
       <div className="panel queue-controls">
         <div className="row queue-controls-heading">
-          <div><span className="eyebrow">Visão rápida</span><h2>Encontre qualquer mesa</h2></div>
-          <span className="queue-count">{requests.length} ativa(s)</span>
+          <div><span className="eyebrow">Visão rápida</span><h2>{kitchenMode ? "Encontre qualquer pedido" : "Encontre qualquer mesa"}</h2></div>
+          <span className="queue-count">{scopedRequests.length} ativo(s)</span>
         </div>
-        <div className="form-grid">
+        <div className={kitchenMode ? "" : "form-grid"}>
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar mesa, comanda ou cliente" aria-label="Buscar na fila" />
-          <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrar tipo de solicitação">
-            <option value="all">Todos os tipos</option>
-            <option value="pedido_digital">🍽 Novo pedido</option>
-            <option value="chamar_garcom">🔔 Chamar atendente</option>
-            <option value="solicitar_fechamento">✓ Fechar comanda</option>
-          </select>
+          {!kitchenMode && (
+            <select value={filter} onChange={(event) => setFilter(event.target.value)} aria-label="Filtrar tipo de solicitação">
+              <option value="all">Todos os tipos</option>
+              <option value="pedido_digital">🍽 Novo pedido</option>
+              <option value="chamar_garcom">🔔 Chamar atendente</option>
+              <option value="solicitar_fechamento">✓ Fechar comanda</option>
+            </select>
+          )}
         </div>
-        <div className="queue-legend" aria-label="Legenda das cores da fila">
-          <span><i className="queue-legend-dot order" />Pedidos</span>
-          <span><i className="queue-legend-dot waiter" />Atendente</span>
-          <span><i className="queue-legend-dot close" />Fechamento</span>
-        </div>
+        {!kitchenMode && (
+          <div className="queue-legend" aria-label="Legenda das cores da fila">
+            <span><i className="queue-legend-dot order" />Pedidos</span>
+            <span><i className="queue-legend-dot waiter" />Atendente</span>
+            <span><i className="queue-legend-dot close" />Fechamento</span>
+          </div>
+        )}
       </div>
       {pending.length > 0 && (
-        <button className="primary queue-next" onClick={claimNext}>Aceitar próxima solicitação</button>
+        <button className="primary queue-next" onClick={claimNext}>{kitchenMode ? "Preparar próximo pedido" : "Aceitar próxima solicitação"}</button>
       )}
       {visibleInProgress.length > 0 && (
         <div className="queue-section">
-          <h2>Em atendimento</h2>
+          <h2>{kitchenMode ? "Em preparo" : "Em atendimento"}</h2>
           {visibleInProgress.map((item, index) => requestCard(item, index, true))}
         </div>
       )}
       <div className="queue-section">
         <h2>Aguardando em ordem de chegada</h2>
         {visiblePending.map((item) => requestCard(item, pending.indexOf(item)))}
-        {!visiblePending.length && <div className="empty">{pending.length ? "Nenhuma solicitação corresponde ao filtro." : "A fila está vazia."}</div>}
+        {!visiblePending.length && <div className="empty">{pending.length ? "Nenhuma solicitação corresponde ao filtro." : kitchenMode ? "Nenhum pedido aguardando preparo." : "A fila está vazia."}</div>}
       </div>
     </section>
   );
