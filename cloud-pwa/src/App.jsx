@@ -191,6 +191,7 @@ function App() {
   const [serviceQueue, setServiceQueue] = useState([]);
   const [establishments, setEstablishments] = useState([]);
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState(
     typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported"
   );
@@ -205,6 +206,35 @@ function App() {
   const canOrders = roleCanEditOrders(profile?.role);
   const canQueue = roleCanManageQueue(profile?.role);
   const isSuperAdmin = profile?.platform_role === "super_admin";
+  const pendingQueueCount = serviceQueue.filter((item) => item.status === "pendente").length;
+
+  const navigate = useCallback((nextView) => {
+    setView(nextView);
+    setSelectedCommandId(null);
+    setMobileMenuOpen(false);
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" }));
+  }, []);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const mobileViewport = window.matchMedia("(max-width: 900px)");
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    };
+    const closeOnDesktop = (event) => {
+      if (!event.matches) setMobileMenuOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    mobileViewport.addEventListener("change", closeOnDesktop);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+      mobileViewport.removeEventListener("change", closeOnDesktop);
+    };
+  }, [mobileMenuOpen]);
 
   const playQueueSound = useCallback((requestType = "pedido_digital") => {
     const context = audioContextRef.current;
@@ -530,34 +560,68 @@ function App() {
           <div className="brand">{profile.establishments?.name || "CloudPDV"}</div>
         </div>
         <nav className="nav-list" aria-label="Navegação principal">
-          <NavButton view={view} id="dashboard" label="Painel" setView={setView} />
-          <NavButton view={view} id="commands" label="Comandas" setView={setView} />
-          {canQueue && <NavButton view={view} id="queue" label={`Fila (${serviceQueue.filter((item) => item.status === "pendente").length})`} setView={setView} />}
-          <NavButton view={view} id="cash" label="Caixa" setView={setView} />
-          <NavButton view={view} id="products" label="Estoque" setView={setView} />
-          {canAdmin && <NavButton view={view} id="reports" label="Relatórios" setView={setView} />}
-          {canAdmin && <NavButton view={view} id="settings" label="Administração" setView={setView} />}
-          {isSuperAdmin && <NavButton view={view} id="platform" label="Plataforma" setView={setView} />}
+          <NavButton view={view} id="dashboard" icon="dashboard" label="Painel" onNavigate={navigate} />
+          <NavButton view={view} id="commands" icon="commands" label="Comandas" onNavigate={navigate} />
+          {canQueue && <NavButton view={view} id="queue" icon="queue" label="Fila" badge={pendingQueueCount} onNavigate={navigate} />}
+          <NavButton view={view} id="cash" icon="cash" label="Caixa" onNavigate={navigate} />
+          <NavButton className="nav-secondary" view={view} id="products" icon="products" label="Estoque" onNavigate={navigate} />
+          {canAdmin && <NavButton className="nav-secondary" view={view} id="reports" icon="reports" label="Relatórios" onNavigate={navigate} />}
+          {canAdmin && <NavButton className="nav-secondary" view={view} id="settings" icon="settings" label="Administração" onNavigate={navigate} />}
+          {isSuperAdmin && <NavButton className="nav-secondary" view={view} id="platform" icon="platform" label="Plataforma" onNavigate={navigate} />}
+          <button
+            type="button"
+            className={`nav mobile-more-trigger ${["products", "reports", "settings", "platform"].includes(view) ? "active" : ""}`}
+            aria-haspopup="dialog"
+            aria-expanded={mobileMenuOpen}
+            onClick={() => setMobileMenuOpen(true)}
+          >
+            <AppIcon name="more" />
+            <span className="nav-label">Mais</span>
+          </button>
         </nav>
         <div className="account-area">
           <div className="userline">
             <strong>{profile.username}</strong>
             <span>{ROLE_LABELS[profile.role] || profile.role}</span>
           </div>
-          <button className="logout" onClick={() => supabase.auth.signOut()}>Sair</button>
+          <button className="logout desktop-logout" onClick={() => supabase.auth.signOut()}>Sair</button>
+          <button
+            type="button"
+            className="mobile-account-trigger"
+            aria-label="Abrir menu da conta"
+            aria-haspopup="dialog"
+            aria-expanded={mobileMenuOpen}
+            onClick={() => setMobileMenuOpen(true)}
+          >
+            <AppIcon name="more" />
+          </button>
         </div>
       </header>
+
+      {mobileMenuOpen && (
+        <MobileMenu
+          view={view}
+          profile={profile}
+          canAdmin={canAdmin}
+          isSuperAdmin={isSuperAdmin}
+          soundActive={notificationPermission === "granted" || soundEnabled}
+          onNavigate={navigate}
+          onEnableSound={enableSound}
+          onClose={() => setMobileMenuOpen(false)}
+        />
+      )}
 
       <main className="main">
         <OfflineBanner online={online} />
         <button className={`sound-toggle ${notificationPermission === "granted" || soundEnabled ? "enabled" : ""}`} onClick={enableSound}>
           {notificationPermission === "granted" ? "Notificações do celular ativas" : soundEnabled ? "Fallback sonoro ativo" : "Ativar som do celular"}
         </button>
+        <div className="view-stage" key={`${view}-${selectedCommandId || "root"}`}>
         {view === "dashboard" && (
           <Dashboard
             data={dashboard}
             cashSession={cashSession}
-            setView={setView}
+            setView={navigate}
             canOrders={canOrders}
             canMoney={canMoney}
             canAdmin={canAdmin}
@@ -626,6 +690,7 @@ function App() {
         {view === "platform" && isSuperAdmin && (
           <PlatformPanel establishments={establishments} run={run} />
         )}
+        </div>
       </main>
     </ShellFrame>
   );
@@ -763,15 +828,92 @@ function ChangePasswordScreen({ show, onDone }) {
   );
 }
 
-function NavButton({ id, view, label, setView }) {
+function AppIcon({ name }) {
+  const paths = {
+    dashboard: <><path d="M4 13h6V4H4v9Z" /><path d="M14 20h6v-9h-6v9Z" /><path d="M4 20h6v-3H4v3Z" /><path d="M14 7h6V4h-6v3Z" /></>,
+    commands: <><path d="M7 4h10a2 2 0 0 1 2 2v14l-3-2-4 2-4-2-3 2V6a2 2 0 0 1 2-2Z" /><path d="M9 9h6M9 13h6" /></>,
+    queue: <><path d="M5 6h14M5 12h10M5 18h6" /><path d="m17 15 3 3-3 3" /></>,
+    cash: <><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M17 14h.01" /><circle cx="12" cy="12" r="2.5" /></>,
+    products: <><path d="m4 7 8-4 8 4-8 4-8-4Z" /><path d="m4 7 8 4 8-4v10l-8 4-8-4V7Z" /><path d="M12 11v10" /></>,
+    reports: <><path d="M5 20V10M12 20V4M19 20v-7" /><path d="M3 20h18" /></>,
+    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.16.37.38.7.6 1 .26.3.64.47 1.04.47H21v4h-.1A1.7 1.7 0 0 0 19.4 15Z" /></>,
+    platform: <><path d="M4 20V8l8-5 8 5v12" /><path d="M8 20v-6h8v6M8 10h.01M12 10h.01M16 10h.01" /></>,
+    more: <><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></>,
+    close: <path d="m6 6 12 12M18 6 6 18" />,
+    sound: <><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12" /></>,
+    logout: <><path d="M10 5H5v14h5" /><path d="m14 8 4 4-4 4M18 12H9" /></>,
+  };
+  return (
+    <svg className="app-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      {paths[name] || paths.more}
+    </svg>
+  );
+}
+
+function NavButton({ id, view, label, badge, icon, className = "", onNavigate }) {
   return (
     <button
-      className={`nav ${view === id ? "active" : ""}`}
+      type="button"
+      className={`nav ${className} ${view === id ? "active" : ""}`}
       aria-current={view === id ? "page" : undefined}
-      onClick={() => setView(id)}
+      onClick={() => onNavigate(id)}
     >
-      {label}
+      <span className="nav-icon-wrap">
+        <AppIcon name={icon} />
+        {Number(badge) > 0 && <span className="nav-badge" aria-label={`${badge} pendente(s)`}>{badge > 99 ? "99+" : badge}</span>}
+      </span>
+      <span className="nav-label">{label}</span>
     </button>
+  );
+}
+
+function MobileMenu({ view, profile, canAdmin, isSuperAdmin, soundActive, onNavigate, onEnableSound, onClose }) {
+  const destinations = [
+    { id: "products", label: "Estoque", detail: "Produtos e quantidades", icon: "products", visible: true },
+    { id: "reports", label: "Relatórios", detail: "Vendas e histórico", icon: "reports", visible: canAdmin },
+    { id: "settings", label: "Administração", detail: "Pix, visual e equipe", icon: "settings", visible: canAdmin },
+    { id: "platform", label: "Plataforma", detail: "Estabelecimentos", icon: "platform", visible: isSuperAdmin },
+  ].filter((item) => item.visible);
+
+  return (
+    <div className="mobile-menu-layer">
+      <button type="button" className="mobile-menu-backdrop" aria-label="Fechar menu" onClick={onClose} />
+      <aside className="mobile-menu-sheet" role="dialog" aria-modal="true" aria-labelledby="mobile-menu-title">
+        <div className="mobile-menu-handle" aria-hidden="true" />
+        <div className="mobile-menu-head">
+          <div>
+            <span className="eyebrow">Conta e gestão</span>
+            <h2 id="mobile-menu-title">Mais opções</h2>
+            <p>{profile.full_name || profile.username} · {ROLE_LABELS[profile.role] || profile.role}</p>
+          </div>
+          <button type="button" className="mobile-menu-close" aria-label="Fechar menu" autoFocus onClick={onClose}><AppIcon name="close" /></button>
+        </div>
+        <div className="mobile-menu-grid">
+          {destinations.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className={`mobile-menu-destination ${view === item.id ? "active" : ""}`}
+              aria-current={view === item.id ? "page" : undefined}
+              onClick={() => onNavigate(item.id)}
+            >
+              <AppIcon name={item.icon} />
+              <span><strong>{item.label}</strong><small>{item.detail}</small></span>
+            </button>
+          ))}
+        </div>
+        <div className="mobile-menu-actions">
+          <button type="button" className={`mobile-sound-action ${soundActive ? "active" : ""}`} onClick={onEnableSound}>
+            <AppIcon name="sound" />
+            <span>{soundActive ? "Notificações ativas" : "Ativar notificações"}</span>
+          </button>
+          <button type="button" className="mobile-logout-action" onClick={() => supabase.auth.signOut()}>
+            <AppIcon name="logout" />
+            <span>Sair da conta</span>
+          </button>
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -2085,6 +2227,7 @@ function SettingsPanel({ settings, profiles, currentProfile, establishment, esta
   const [values, setValues] = useState({});
   const [userForm, setUserForm] = useState(DEFAULT_USER_FORM);
   const [deletingUserId, setDeletingUserId] = useState(null);
+  const [adminSection, setAdminSection] = useState("business");
 
   useEffect(() => {
     setValues({
@@ -2191,120 +2334,189 @@ function SettingsPanel({ settings, profiles, currentProfile, establishment, esta
 
   return (
     <section>
-      <Header title="Administracao" subtitle="Estabelecimento, Pix e usuarios da equipe" />
-      <form className="panel" onSubmit={saveSettings}>
-        <h2>Estabelecimento e Pix</h2>
-        <label>Nome do estabelecimento</label>
-        <input value={values.establishment_name || ""} onChange={(event) => setValue("establishment_name", event.target.value)} />
-        <label>Chave Pix</label>
-        <input value={values.pix_key || ""} onChange={(event) => setValue("pix_key", event.target.value)} />
-        <label>Nome do recebedor</label>
-        <input value={values.pix_receiver_name || ""} onChange={(event) => setValue("pix_receiver_name", event.target.value)} />
-        <label>Cidade</label>
-        <input value={values.pix_city || ""} onChange={(event) => setValue("pix_city", event.target.value)} />
-        <label>Descricao Pix</label>
-        <input value={values.pix_description || ""} onChange={(event) => setValue("pix_description", event.target.value)} />
-        <div className="theme-grid">
-          <label>Cor principal<input type="color" value={values.primary_color || establishment?.primary_color || "#a85a2a"} onChange={(event) => setValue("primary_color", event.target.value)} /></label>
-          <label>Cor secundaria<input type="color" value={values.secondary_color || establishment?.secondary_color || "#6f3f2b"} onChange={(event) => setValue("secondary_color", event.target.value)} /></label>
-          <label>Destaque<input type="color" value={values.accent_color || establishment?.accent_color || "#d79a3a"} onChange={(event) => setValue("accent_color", event.target.value)} /></label>
-          <label>Fundo<input type="color" value={values.background_color || establishment?.background_color || "#f6f2ec"} onChange={(event) => setValue("background_color", event.target.value)} /></label>
-        </div>
-        <button className="primary">Salvar configuracoes</button>
-      </form>
+      <Header title="Administração" subtitle="Controle o estabelecimento sem misturar configurações, recebimentos e equipe" />
 
-      <div className="panel">
-        <div className="row">
-          <h2>Usuarios</h2>
-          <span className="pill">Admin controla tudo</span>
-        </div>
-        <form className="form-grid user-form" onSubmit={saveUser}>
-          <div>
-            <label>Usuario</label>
-            <input
-              placeholder="ex: atendente2"
-              pattern="[a-z0-9_.-]+"
-              title="Use apenas letras minúsculas, números, ponto, hífen ou sublinhado. Não é necessário usar @."
-              value={userForm.username}
-              onChange={(event) => setUserForm((current) => ({ ...current, username: event.target.value }))}
-              required
-            />
-          </div>
-          <div>
-            <label>Nome</label>
-            <input
-              placeholder="Nome completo"
-              value={userForm.fullName}
-              onChange={(event) => setUserForm((current) => ({ ...current, fullName: event.target.value }))}
-            />
-          </div>
-          <div>
-            <label>Senha</label>
-            <input
-              placeholder="minimo 6 caracteres"
-              type="password"
-              value={userForm.password}
-              onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
-              required
-            />
-          </div>
-          <div>
-            <label>Perfil</label>
-            <select
-              value={userForm.role}
-              onChange={(event) => setUserForm((current) => ({ ...current, role: event.target.value }))}
-            >
-              {Object.entries(ROLE_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
-          </div>
-          <label className="checkline">
-            <input
-              type="checkbox"
-              checked={userForm.active}
-              onChange={(event) => setUserForm((current) => ({ ...current, active: event.target.checked }))}
-            />
-            Ativo
-          </label>
-          <button className="primary">Criar ou atualizar usuario</button>
-          <small>
-            Para entrar, use apenas o usuario (sem @). Use letras minúsculas, números, ponto, hífen ou sublinhado; o sistema cria o email técnico internamente.
-          </small>
-        </form>
-        <div className="table-list">
-          {profiles.map((item) => (
-            <div className="table-row" key={item.id}>
-              <div>
-                <strong>{item.username}</strong>
-                <small>{item.full_name || item.email || (item.active ? "ativo" : "inativo")}</small>
-              </div>
-              <select value={item.role} onChange={(event) => updateRole(item.id, event.target.value)}>
-                {Object.entries(ROLE_LABELS).map(([key, label]) => (
-                  <option key={key} value={key}>{label}</option>
-                ))}
-              </select>
-              <select
-                value={item.active ? "active" : "inactive"}
-                onChange={(event) => updateActive(item.id, event.target.value === "active")}
-              >
-                <option value="active">Ativo</option>
-                <option value="inactive">Inativo</option>
-              </select>
-              {!item.active && canDeleteInactiveUser(item, currentProfile) && (
-                <button
-                  type="button"
-                  className="danger small"
-                  disabled={deletingUserId === item.id}
-                  onClick={() => deleteInactiveUser(item)}
-                >
-                  {deletingUserId === item.id ? "Excluindo…" : "Excluir usuário"}
-                </button>
-              )}
+      <nav className="admin-tabs" role="tablist" aria-label="Áreas administrativas">
+        <button type="button" role="tab" aria-selected={adminSection === "business"} className={adminSection === "business" ? "active" : ""} onClick={() => setAdminSection("business")}>
+          <AppIcon name="settings" />
+          <span><strong>Visual</strong><small>Marca e cores</small></span>
+        </button>
+        <button type="button" role="tab" aria-selected={adminSection === "pix"} className={adminSection === "pix" ? "active" : ""} onClick={() => setAdminSection("pix")}>
+          <AppIcon name="cash" />
+          <span><strong>Pix</strong><small>Recebimentos</small></span>
+        </button>
+        <button type="button" role="tab" aria-selected={adminSection === "team"} className={adminSection === "team" ? "active" : ""} onClick={() => setAdminSection("team")}>
+          <AppIcon name="commands" />
+          <span><strong>Equipe</strong><small>{profiles.length} usuário(s)</small></span>
+        </button>
+      </nav>
+
+      {adminSection === "business" && (
+        <div className="admin-section-stage admin-business-grid" role="tabpanel" key="business">
+          <form className="panel admin-form" onSubmit={saveSettings}>
+            <span className="eyebrow">Identidade do negócio</span>
+            <h2>Nome e aparência</h2>
+            <p className="muted">As cores são aplicadas a toda a equipe após salvar.</p>
+            <label htmlFor="establishment-name">Nome do estabelecimento</label>
+            <input id="establishment-name" value={values.establishment_name || ""} onChange={(event) => setValue("establishment_name", event.target.value)} />
+            <div className="theme-grid">
+              <label>Principal<input aria-label="Cor principal" type="color" value={values.primary_color || establishment?.primary_color || "#a85a2a"} onChange={(event) => setValue("primary_color", event.target.value)} /></label>
+              <label>Secundária<input aria-label="Cor secundária" type="color" value={values.secondary_color || establishment?.secondary_color || "#6f3f2b"} onChange={(event) => setValue("secondary_color", event.target.value)} /></label>
+              <label>Destaque<input aria-label="Cor de destaque" type="color" value={values.accent_color || establishment?.accent_color || "#d79a3a"} onChange={(event) => setValue("accent_color", event.target.value)} /></label>
+              <label>Fundo<input aria-label="Cor de fundo" type="color" value={values.background_color || establishment?.background_color || "#f6f2ec"} onChange={(event) => setValue("background_color", event.target.value)} /></label>
             </div>
-          ))}
+            <button className="primary admin-save-button">Salvar identidade</button>
+          </form>
+
+          <aside
+            className="admin-brand-preview"
+            aria-label="Prévia das cores"
+            style={{
+              "--preview-primary": values.primary_color || "#a85a2a",
+              "--preview-secondary": values.secondary_color || "#6f3f2b",
+              "--preview-accent": values.accent_color || "#d79a3a",
+              "--preview-background": values.background_color || "#f6f2ec",
+            }}
+          >
+            <div className="admin-preview-topline"><span>Prévia ao vivo</span><i /></div>
+            <div className="admin-preview-content">
+              <span className="admin-preview-brand">CLOUDPDV</span>
+              <h3>{values.establishment_name || establishment?.name || "Seu estabelecimento"}</h3>
+              <div className="admin-preview-metrics"><span>Vendas hoje<strong>R$ 1.240</strong></span><span>Fila<strong>03</strong></span></div>
+              <button type="button">Ação principal</button>
+            </div>
+          </aside>
         </div>
-      </div>
+      )}
+
+      {adminSection === "pix" && (
+        <div className="admin-section-stage admin-pix-grid" role="tabpanel" key="pix">
+          <form className="panel admin-form" onSubmit={saveSettings}>
+            <span className="eyebrow">Recebimento rápido</span>
+            <h2>Configuração do Pix</h2>
+            <p className="muted">Esses dados formam o QR Code exibido no fechamento da comanda.</p>
+            <label htmlFor="pix-key">Chave Pix</label>
+            <input id="pix-key" value={values.pix_key || ""} onChange={(event) => setValue("pix_key", event.target.value)} placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória" />
+            <div className="form-grid">
+              <div><label htmlFor="pix-receiver">Nome do recebedor</label><input id="pix-receiver" value={values.pix_receiver_name || ""} onChange={(event) => setValue("pix_receiver_name", event.target.value)} /></div>
+              <div><label htmlFor="pix-city">Cidade</label><input id="pix-city" value={values.pix_city || ""} onChange={(event) => setValue("pix_city", event.target.value)} /></div>
+            </div>
+            <label htmlFor="pix-description">Descrição no pagamento</label>
+            <input id="pix-description" value={values.pix_description || ""} onChange={(event) => setValue("pix_description", event.target.value)} placeholder="Ex.: Pagamento da comanda" />
+            <button className="primary admin-save-button">Salvar dados do Pix</button>
+          </form>
+          <aside className="panel admin-help-card">
+            <span className="eyebrow">Conferência</span>
+            <h2>Antes de liberar</h2>
+            <ul>
+              <li>Confira se a chave pertence ao estabelecimento.</li>
+              <li>Use o nome e a cidade cadastrados no banco.</li>
+              <li>Faça um pagamento de valor baixo para validar.</li>
+            </ul>
+          </aside>
+        </div>
+      )}
+
+      {adminSection === "team" && (
+        <div className="admin-section-stage" role="tabpanel" key="team">
+          <div className="panel admin-team-panel">
+            <div className="admin-panel-heading">
+              <div><span className="eyebrow">Acessos</span><h2>Usuários da equipe</h2></div>
+              <span className="pill">Admin controla tudo</span>
+            </div>
+            <form className="form-grid user-form" onSubmit={saveUser}>
+              <div>
+                <label>Usuário</label>
+                <input
+                  placeholder="ex: atendente2"
+                  pattern="[a-z0-9_.-]+"
+                  title="Use apenas letras minúsculas, números, ponto, hífen ou sublinhado. Não é necessário usar @."
+                  value={userForm.username}
+                  onChange={(event) => setUserForm((current) => ({ ...current, username: event.target.value }))}
+                  required
+                />
+              </div>
+              <div>
+                <label>Nome</label>
+                <input
+                  placeholder="Nome completo"
+                  value={userForm.fullName}
+                  onChange={(event) => setUserForm((current) => ({ ...current, fullName: event.target.value }))}
+                />
+              </div>
+              <div>
+                <label>Senha inicial</label>
+                <input
+                  placeholder="Mínimo 6 caracteres"
+                  type="password"
+                  minLength="6"
+                  autoComplete="new-password"
+                  value={userForm.password}
+                  onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
+                  required
+                />
+              </div>
+              <div>
+                <label>Perfil</label>
+                <select
+                  value={userForm.role}
+                  onChange={(event) => setUserForm((current) => ({ ...current, role: event.target.value }))}
+                >
+                  {Object.entries(ROLE_LABELS).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+              <label className="checkline user-active-check">
+                <input
+                  type="checkbox"
+                  checked={userForm.active}
+                  onChange={(event) => setUserForm((current) => ({ ...current, active: event.target.checked }))}
+                />
+                Acesso ativo
+              </label>
+              <button className="primary">Criar ou atualizar</button>
+            </form>
+            <p className="admin-form-note">O usuário entra sem usar @. O e-mail técnico é criado internamente e permanece separado do acesso de outros estabelecimentos.</p>
+          </div>
+
+          <div className="user-management-list" aria-label="Usuários cadastrados">
+            {profiles.map((item) => (
+              <article className={`user-management-card ${item.active ? "" : "inactive"}`} key={item.id}>
+                <div className="user-card-identity">
+                  <span className="user-avatar" aria-hidden="true">{(item.full_name || item.username || "U").trim().charAt(0).toUpperCase()}</span>
+                  <div>
+                    <strong>{item.full_name || item.username}</strong>
+                    <small>@{item.username}</small>
+                  </div>
+                  <span className={`status ${item.active ? "aberto" : "cancelada"}`}>{item.active ? "Ativo" : "Inativo"}</span>
+                </div>
+                <div className="user-card-controls">
+                  <label>Perfil<select aria-label={`Perfil de ${item.username}`} value={item.role} onChange={(event) => updateRole(item.id, event.target.value)}>
+                    {Object.entries(ROLE_LABELS).map(([key, label]) => (
+                      <option key={key} value={key}>{label}</option>
+                    ))}
+                  </select></label>
+                  <label>Acesso<select aria-label={`Acesso de ${item.username}`} value={item.active ? "active" : "inactive"} onChange={(event) => updateActive(item.id, event.target.value === "active")}>
+                    <option value="active">Ativo</option>
+                    <option value="inactive">Inativo</option>
+                  </select></label>
+                  {!item.active && canDeleteInactiveUser(item, currentProfile) && (
+                    <button
+                      type="button"
+                      className="danger small"
+                      disabled={deletingUserId === item.id}
+                      onClick={() => deleteInactiveUser(item)}
+                    >
+                      {deletingUserId === item.id ? "Excluindo…" : "Excluir"}
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
