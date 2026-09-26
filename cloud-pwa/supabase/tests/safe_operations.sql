@@ -24,6 +24,25 @@ begin
     'Report page respects the requested limit';
   summary := public.get_dashboard_summary();
   assert summary ? 'total_vendido_hoje', 'Administrator dashboard contains financial keys';
+  assert public.can_manage_money(), 'Administrator can manage money';
+  assert public.can_edit_orders(), 'Administrator can edit orders';
+
+  execute 'reset role';
+  update public.profiles set role = 'caixa' where id = staff;
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', staff, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+
+  assert public.can_manage_money(), 'Cashier can manage money';
+  assert public.can_edit_orders(), 'Cashier can edit orders';
+  failed := false;
+  begin
+    perform public.get_sales_report_summary(current_date, current_date);
+  exception when insufficient_privilege then
+    failed := true;
+  end;
+  assert failed, 'Cashier cannot access administrative reports';
+  summary := public.get_dashboard_summary();
+  assert summary->'total_vendido_hoje' <> 'null'::jsonb, 'Cashier dashboard contains financial totals';
 
   execute 'reset role';
   update public.profiles set role = 'atendente' where id = staff;
@@ -40,9 +59,34 @@ begin
   summary := public.get_dashboard_summary();
   assert summary->'total_vendido_hoje' = 'null'::jsonb, 'Attendant dashboard hides financial totals';
   assert (select count(*) from public.cash_sessions) = 0, 'Attendant cannot read cash sessions';
+  assert not public.can_manage_money(), 'Attendant cannot manage money';
+  assert public.can_edit_orders(), 'Attendant can edit orders';
+
+  execute 'reset role';
+  update public.profiles set role = 'cozinha' where id = staff;
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', staff, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+
+  failed := false;
+  begin
+    perform public.get_sales_report_summary(current_date, current_date);
+  exception when insufficient_privilege then
+    failed := true;
+  end;
+  assert failed, 'Kitchen cannot access administrative reports';
+  failed := false;
+  begin
+    perform public.get_dashboard_summary();
+  exception when insufficient_privilege then
+    failed := true;
+  end;
+  assert failed, 'Kitchen cannot access the dashboard';
+  assert (select count(*) from public.cash_sessions) = 0, 'Kitchen cannot read cash sessions';
+  assert not public.can_manage_money(), 'Kitchen cannot manage money';
+  assert not public.can_edit_orders(), 'Kitchen cannot edit orders';
 
   execute 'reset role';
   update public.profiles set role = original_role where id = staff;
 end $$;
-select 'PASS: paginated reports, financial privacy and role restrictions' as result;
+select 'PASS: paginated reports, financial privacy and admin/caixa/atendente/cozinha restrictions' as result;
 rollback;
