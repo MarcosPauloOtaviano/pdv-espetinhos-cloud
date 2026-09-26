@@ -12,7 +12,12 @@ test("cozinha abre somente a fila de pedidos", () => {
   assert.deepEqual(realtimeTablesForRole("cozinha", ["commands", "service_queue"]), ["service_queue"]);
 });
 
-test("demais perfis mantêm a navegação solicitada", () => {
+test("perfis operacionais acessam somente as áreas necessárias", () => {
   assert.equal(defaultViewForRole("atendente", "commands"), "commands");
+  assert.equal(defaultViewForRole("atendente", "cash"), "commands");
+  assert.equal(roleCanAccessView("atendente", "cash"), false);
+  assert.equal(roleCanAccessView("atendente", "products"), false);
+  assert.equal(roleCanAccessView("caixa", "cash"), true);
+  assert.equal(roleCanAccessView("caixa", "settings"), false);
   assert.equal(roleCanAccessView("admin", "settings"), true);
 });

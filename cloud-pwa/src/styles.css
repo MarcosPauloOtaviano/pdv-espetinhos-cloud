@@ -878,6 +878,179 @@ small {
   border-color: var(--red);
 }
 
+.operational-status {
+  width: max-content;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 14px auto;
+  padding: 7px 10px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: .72rem;
+}
+
+.operational-status strong {
+  color: var(--text);
+}
+
+.operational-status small {
+  padding-left: 7px;
+  border-left: 1px solid var(--line);
+}
+
+.operational-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #b7893a;
+  box-shadow: 0 0 0 3px rgba(183, 137, 58, .14);
+}
+
+.operational-status.connected .operational-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(37, 99, 73, .14);
+}
+
+.operational-status.offline .operational-dot,
+.operational-status.error .operational-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(168, 60, 53, .14);
+}
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: #fff8e5;
+  border: 1px solid #e3c06d;
+  border-radius: 14px;
+}
+
+.update-banner strong,
+.update-banner span {
+  display: block;
+}
+
+.update-banner span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.report-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.report-tabs button {
+  min-width: 110px;
+  padding: 10px 16px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-weight: 800;
+}
+
+.report-tabs button.active {
+  color: #fff;
+  background: var(--orange-2);
+  border-color: var(--orange-2);
+}
+
+.audit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.audit-row strong,
+.audit-row small {
+  display: block;
+}
+
+.audit-row small,
+.audit-row time {
+  color: var(--muted);
+  font-size: .74rem;
+}
+
+.audit-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--orange);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--orange) 15%, transparent);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.pagination span {
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.cash-reconciliation {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.cash-reconciliation span,
+.cash-reconciliation strong {
+  display: block;
+}
+
+.cash-reconciliation span {
+  color: var(--muted);
+  font-size: .75rem;
+}
+
+.cash-reconciliation strong {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 1.05rem;
+}
+
+.cash-reconciliation.balanced {
+  background: #eef8f2;
+  border-color: #bfdfcc;
+}
+
+.cash-reconciliation.different {
+  background: #fff3f1;
+  border-color: #edc6c1;
+}
+
 @media (max-width: 900px) {
   .app-frame {
     display: block;
@@ -896,6 +1069,10 @@ small {
     padding: 8px;
     border-right: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .operational-status {
+    margin-right: 0;
   }
 
   .brand,
@@ -2593,6 +2770,45 @@ button:active:not(:disabled) {
 @media (max-width: 520px) {
   .main {
     padding-top: 16px;
+  }
+
+  .operational-status {
+    width: 100%;
+    justify-content: center;
+    border-radius: 12px;
+  }
+
+  .operational-status small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .update-banner,
+  .pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .update-banner button,
+  .pagination button {
+    width: 100%;
+  }
+
+  .pagination span {
+    text-align: center;
+  }
+
+  .audit-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .audit-row time {
+    grid-column: 2;
+  }
+
+  .cash-reconciliation {
+    grid-template-columns: 1fr;
   }
 
   .section-header {

@@ -1,12 +1,25 @@
-const KITCHEN_VIEW = "queue";
+const DEFAULT_VIEW_BY_ROLE = {
+  admin: "dashboard",
+  caixa: "dashboard",
+  atendente: "commands",
+  cozinha: "queue",
+};
+
+const VIEW_ACCESS_BY_ROLE = {
+  admin: new Set(["dashboard", "commands", "queue", "cash", "products", "reports", "settings", "platform"]),
+  caixa: new Set(["dashboard", "commands", "queue", "cash"]),
+  atendente: new Set(["dashboard", "commands", "queue"]),
+  cozinha: new Set(["queue"]),
+};
 
 export function defaultViewForRole(role, requestedView = "dashboard") {
-  return role === "cozinha" ? KITCHEN_VIEW : requestedView;
+  return roleCanAccessView(role, requestedView)
+    ? requestedView
+    : DEFAULT_VIEW_BY_ROLE[role] || "dashboard";
 }
 
 export function roleCanAccessView(role, view) {
-  if (role === "cozinha") return view === KITCHEN_VIEW;
-  return true;
+  return VIEW_ACCESS_BY_ROLE[role]?.has(view) ?? false;
 }
 
 export function realtimeTablesForRole(role, defaultTables) {

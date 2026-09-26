@@ -1,4 +1,4 @@
-# PDV Espetinhos Cloud PWA
+# CloudPDV PWA
 
 Plataforma em nuvem multiestabelecimento do PDV Espetinhos. Esta pasta nao substitui o sistema local
 Python/SQLite: ela cria uma PWA independente, usando Supabase/PostgreSQL como
@@ -167,8 +167,9 @@ instalada e com a sessao realtime conectada. Para alertar com o aplicativo
 totalmente encerrado, ainda e necessario configurar Web Push (assinatura por
 garcom, VAPID e uma rotina server-side para publicar o evento).
 
-As atualizacoes realtime sao agrupadas em pequenas janelas para evitar uma
-recarga completa por evento quando varias mesas fazem pedidos ao mesmo tempo.
+As atualizacoes realtime sao agrupadas em pequenas janelas e recarregam apenas
+o domínio afetado (fila, comandas, caixa, catálogo ou painel). O cabeçalho exibe
+o estado da conexão e o horário da última sincronização.
 Antes de uma operacao com muitas mesas, valide os limites do plano Supabase e
 execute um teste de carga com a quantidade real de celulares conectados.
 
@@ -182,8 +183,10 @@ execute um teste de carga com a quantidade real de celulares conectados.
   automaticamente poucos segundos depois da meia-noite e inicia os indicadores
   financeiros em zero.
 - Administradores podem abrir **Relatórios** pelo atalho do painel. A tela
-  permite filtrar um período, voltar para **Hoje** ou carregar o **Histórico
-  completo** sem alterar os dados operacionais. O filtro inclui também vendas e
+  permite filtrar um período, voltar para **Hoje**, consultar o **Histórico
+  completo**, exportar CSV e navegar por páginas sem carregar todo o banco no
+  navegador. A aba **Atividades** apresenta o histórico administrativo sem
+  expor os valores brutos armazenados na auditoria. O filtro inclui vendas e
   cancelamentos encerrados depois da meia-noite, usando a mesma data de
   fechamento do painel, mesmo quando a comanda foi aberta no dia anterior.
 
@@ -196,6 +199,17 @@ execute um teste de carga com a quantidade real de celulares conectados.
 - Fechamento calcula total vendido, dinheiro esperado, Pix, cartoes, misto,
   sangrias, reforcos, comandas abertas/canceladas/fiado, top produtos e
   usuarios vendedores.
+- O administrador informa primeiro o dinheiro contado. O valor esperado e a
+  diferença aparecem somente na conferência; divergência ou fechamento forçado
+  exigem justificativa auditável.
+
+## Atualizações seguras
+
+O PWA avisa quando uma nova versão está disponível e deixa o operador escolher
+**Atualizar agora** depois de concluir a ação atual. Para publicar mudanças que
+incluam banco, aplique primeiro as migrações aditivas e somente depois publique
+o frontend. A migração `202609250001_safe_operations_and_reports.sql` prepara os
+relatórios paginados e as regras novas de fechamento sem remover dados.
 
 ## Offline
 

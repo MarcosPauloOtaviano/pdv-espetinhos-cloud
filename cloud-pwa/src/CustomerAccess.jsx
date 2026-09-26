@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import QRCode from 'qrcode';
 import { supabase } from './lib/supabase';
 import { dateTime } from './lib/format';
 
@@ -26,7 +25,7 @@ export default function CustomerAccess({ commandId }) {
   useEffect(() => {
     let current = true;
     setQr('');
-    if (url) QRCode.toDataURL(url, { width: 320, margin: 3 }).then((image) => { if (current) setQr(image); })
+    if (url) import('qrcode').then(({ default: QRCode }) => QRCode.toDataURL(url, { width: 320, margin: 3 })).then((image) => { if (current) setQr(image); })
       .catch(() => { if (current) setError('Não foi possível desenhar o QR Code. Use o link abaixo.'); });
     return () => { current = false; };
   }, [url]);

@@ -1,5 +1,3 @@
-import QRCode from "qrcode";
-
 function emvField(id, value) {
   const text = String(value ?? "");
   return `${id}${String(text.length).padStart(2, "0")}${text}`;
@@ -56,5 +54,6 @@ export function buildPixPayload({
 }
 
 export async function pixQrDataUrl(payload) {
+  const { default: QRCode } = await import("qrcode");
   return QRCode.toDataURL(payload, { margin: 2, width: 260 });
 }

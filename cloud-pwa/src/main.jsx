@@ -1,12 +1,23 @@
-import React, { useEffect, useState } from "react";
+import React, { lazy, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
-import CustomerApp from "./CustomerApp.jsx";
 import "./styles.css";
+
+const CustomerApp = lazy(() => import("./CustomerApp.jsx"));
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    const announceUpdate = () => window.dispatchEvent(new CustomEvent("cloudpdv:update-available"));
+    navigator.serviceWorker.register("/sw.js").then((registration) => {
+      if (registration.waiting && hadController) announceUpdate();
+      registration.addEventListener("updatefound", () => {
+        const worker = registration.installing;
+        worker?.addEventListener("statechange", () => {
+          if (worker.state === "installed" && navigator.serviceWorker.controller) announceUpdate();
+        });
+      });
+    }).catch(() => undefined);
   });
 }
 
@@ -19,7 +30,7 @@ function RootRoute() {
   }, []);
   if (hash.startsWith('#/comanda/')) {
     const token = hash.slice('#/comanda/'.length);
-    return <CustomerApp key={token} token={token} />;
+    return <Suspense fallback={<main className="customer-shell"><section className="panel">Abrindo sua comanda…</section></main>}><CustomerApp key={token} token={token} /></Suspense>;
   }
   return <App />;
 }

@@ -24,9 +24,11 @@ import { canDeleteInactiveUser, commandOwner, filterProducts, inventoryValue, is
 import { defaultViewForRole, realtimeTablesForRole, roleCanAccessView } from "./lib/access";
 import { groupProductsByCategory } from "./lib/catalog";
 import { runMutationWithRefresh } from "./lib/operations";
+import { auditActionLabel, cashCloseNeedsReason, cashDifference, refreshScopesForTable, syncStatusMeta } from "./lib/operational";
 import CustomerAccess from './CustomerAccess';
 
 const REALTIME_TABLES = [
+  "establishments",
   "settings",
   "categories",
   "products",
@@ -196,11 +198,15 @@ function App() {
   const [notificationPermission, setNotificationPermission] = useState(
     typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported"
   );
+  const [realtimeStatus, setRealtimeStatus] = useState("connecting");
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const audioContextRef = useRef(null);
   const notifiedRequestsRef = useRef(new Set());
   const refreshTimerRef = useRef(null);
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+  const pendingRefreshScopesRef = useRef(new Set());
 
   const canMoney = roleCanManageMoney(profile?.role);
   const canAdmin = roleCanManageAdmin(profile?.role);
@@ -354,8 +360,15 @@ function App() {
       setProfiles([]);
       setServiceQueue(Array.isArray(queueData) ? queueData : []);
       setEstablishments([]);
+      setLastSyncedAt(new Date());
       return;
     }
+
+    const profileCanMoney = roleCanManageMoney(currentProfileData?.role);
+    const profileCanAdmin = roleCanManageAdmin(currentProfileData?.role);
+    const productSelect = profileCanAdmin
+      ? "*, categories(name)"
+      : "id, name, category_id, price, track_stock, stock_quantity, active, categories(name)";
 
     const [
       settingsData,
@@ -370,7 +383,7 @@ function App() {
     ] = await Promise.all([
       unwrap(supabase.from("settings").select("*").order("key")),
       unwrap(supabase.from("categories").select("*").order("name")),
-      unwrap(supabase.from("products").select("*, categories(name)").order("name")),
+      unwrap(supabase.from("products").select(productSelect).order("name")),
       unwrap(
         supabase
           .from("commands")
@@ -378,7 +391,9 @@ function App() {
           .in("status", ["aberto", "aguardando_pagamento", "fiado"])
           .order("opened_at", { ascending: false })
       ),
-      unwrap(supabase.from("cash_sessions").select("*").eq("status", "aberto").maybeSingle()),
+      profileCanMoney
+        ? unwrap(supabase.from("cash_sessions").select("*").eq("status", "aberto").maybeSingle())
+        : Promise.resolve(null),
       unwrap(supabase.rpc("get_dashboard_summary")),
       unwrap(supabase.from("profiles").select("*").order("username")),
       unwrap(
@@ -389,7 +404,9 @@ function App() {
           .order("requested_at", { ascending: true })
           .order("id", { ascending: true })
       ),
-      unwrap(supabase.from("establishments").select("*").order("name")),
+      currentProfileData?.platform_role === "super_admin"
+        ? unwrap(supabase.from("establishments").select("*").order("name"))
+        : Promise.resolve([]),
     ]);
     setSettings(settingsData || []);
     setCategories(categoriesData || []);
@@ -400,7 +417,76 @@ function App() {
     setProfiles(profilesData || []);
     setServiceQueue(queueData || []);
     setEstablishments(establishmentsData || []);
+    setLastSyncedAt(new Date());
   }, [session]);
+
+  const refreshScoped = useCallback(async (requestedScopes) => {
+    if (!supabase || !session || !profile) return;
+    const scopes = new Set(requestedScopes);
+    if (scopes.has("all")) {
+      await refreshAll();
+      return;
+    }
+    if (profile.role === "cozinha") {
+      if (scopes.has("queue")) {
+        const queueData = await unwrap(supabase.rpc("get_kitchen_queue"));
+        setServiceQueue(Array.isArray(queueData) ? queueData : []);
+        setLastSyncedAt(new Date());
+      }
+      return;
+    }
+
+    const tasks = [];
+    if (scopes.has("profile")) {
+      tasks.push(getProfile(session.user.id).then((data) => setProfile(data || null)));
+    }
+    if (scopes.has("settings")) {
+      tasks.push(unwrap(supabase.from("settings").select("*").order("key")).then((data) => setSettings(data || [])));
+    }
+    if (scopes.has("catalog")) {
+      const productSelect = roleCanManageAdmin(profile.role)
+        ? "*, categories(name)"
+        : "id, name, category_id, price, track_stock, stock_quantity, active, categories(name)";
+      tasks.push(Promise.all([
+        unwrap(supabase.from("categories").select("*").order("name")),
+        unwrap(supabase.from("products").select(productSelect).order("name")),
+      ]).then(([categoryData, productData]) => {
+        setCategories(categoryData || []);
+        setProducts(productData || []);
+      }));
+    }
+    if (scopes.has("commands")) {
+      tasks.push(unwrap(
+        supabase.from("commands").select("*, command_items(*), payments(*)")
+          .in("status", ["aberto", "aguardando_pagamento", "fiado"])
+          .order("opened_at", { ascending: false })
+      ).then((data) => setCommands(data || [])));
+    }
+    if (scopes.has("cash") && roleCanManageMoney(profile.role)) {
+      tasks.push(unwrap(supabase.from("cash_sessions").select("*").eq("status", "aberto").maybeSingle()).then((data) => setCashSession(data || null)));
+    }
+    if (scopes.has("dashboard")) {
+      tasks.push(unwrap(supabase.rpc("get_dashboard_summary")).then((data) => setDashboard(data || null)));
+    }
+    if (scopes.has("profiles")) {
+      tasks.push(Promise.all([
+        getProfile(session.user.id),
+        unwrap(supabase.from("profiles").select("*").order("username")),
+      ]).then(([current, data]) => {
+        setProfile(current || null);
+        setProfiles(data || []);
+      }));
+    }
+    if (scopes.has("queue")) {
+      tasks.push(unwrap(
+        supabase.from("service_queue").select("*, commands(number, customer_name, table_ref)")
+          .in("status", ["pendente", "em_atendimento"])
+          .order("requested_at", { ascending: true }).order("id", { ascending: true })
+      ).then((data) => setServiceQueue(data || [])));
+    }
+    await Promise.all(tasks);
+    setLastSyncedAt(new Date());
+  }, [profile, refreshAll, session]);
 
   useEffect(() => {
     const theme = profile?.establishments;
@@ -459,7 +545,8 @@ function App() {
     refreshAll().catch((error) => show(error.message, "error"));
   }, [session, refreshAll, show]);
 
-  const scheduleRefresh = useCallback((delay = 400) => {
+  const scheduleRefresh = useCallback((scopes = ["all"], delay = 400) => {
+    scopes.forEach((scope) => pendingRefreshScopesRef.current.add(scope));
     if (refreshInFlightRef.current) {
       refreshQueuedRef.current = true;
       return;
@@ -468,20 +555,28 @@ function App() {
     refreshTimerRef.current = setTimeout(() => {
       refreshTimerRef.current = null;
       refreshInFlightRef.current = true;
-      refreshAll()
+      const pendingScopes = [...pendingRefreshScopesRef.current];
+      pendingRefreshScopesRef.current.clear();
+      refreshScoped(pendingScopes.length ? pendingScopes : ["all"])
         .catch((error) => show(error.message, "error"))
         .finally(() => {
           refreshInFlightRef.current = false;
           if (refreshQueuedRef.current) {
             refreshQueuedRef.current = false;
-            scheduleRefresh(delay);
+            scheduleRefresh([], delay);
           }
         });
     }, delay);
-  }, [refreshAll, show]);
+  }, [refreshScoped, show]);
 
   useEffect(() => () => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const available = () => setUpdateAvailable(true);
+    window.addEventListener("cloudpdv:update-available", available);
+    return () => window.removeEventListener("cloudpdv:update-available", available);
   }, []);
 
   useEffect(() => {
@@ -523,7 +618,9 @@ function App() {
           event: "*",
           schema: "public",
           table,
-          filter: `establishment_id=eq.${profile.establishment_id}`,
+          filter: table === "establishments"
+            ? `id=eq.${profile.establishment_id}`
+            : `establishment_id=eq.${profile.establishment_id}`,
         },
         async (payload) => {
           if (table === "service_queue" && payload.eventType === "INSERT") {
@@ -533,12 +630,15 @@ function App() {
               await notifyQueueRequest(payload.new);
             }
           }
-          scheduleRefresh();
+          scheduleRefresh(refreshScopesForTable(table));
         }
       );
     });
     channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") setRealtimeStatus("connected");
+      if (status === "CLOSED") setRealtimeStatus("connecting");
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        setRealtimeStatus("error");
         show("A conexão em tempo real foi interrompida. O sistema tentará reconectar.", "error");
       }
     });
@@ -553,6 +653,10 @@ function App() {
   );
 
   async function run(action, successMessage) {
+    if (!navigator.onLine) {
+      show("Sem internet. Aguarde a conexão voltar antes de salvar.", "error");
+      return null;
+    }
     setBusy(true);
     try {
       const { result, refreshError } = await runMutationWithRefresh(action, refreshAll);
@@ -592,8 +696,8 @@ function App() {
               <NavButton view={activeView} id="dashboard" icon="dashboard" label="Painel" onNavigate={navigate} />
               <NavButton view={activeView} id="commands" icon="commands" label="Comandas" onNavigate={navigate} />
               {canQueue && <NavButton view={activeView} id="queue" icon="queue" label="Fila" badge={pendingQueueCount} onNavigate={navigate} />}
-              <NavButton view={activeView} id="cash" icon="cash" label="Caixa" onNavigate={navigate} />
-              <NavButton className="nav-secondary" view={activeView} id="products" icon="products" label="Estoque" onNavigate={navigate} />
+              {canMoney && <NavButton view={activeView} id="cash" icon="cash" label="Caixa" onNavigate={navigate} />}
+              {canAdmin && <NavButton className="nav-secondary" view={activeView} id="products" icon="products" label="Estoque" onNavigate={navigate} />}
               {canAdmin && <NavButton className="nav-secondary" view={activeView} id="reports" icon="reports" label="Relatórios" onNavigate={navigate} />}
               {canAdmin && <NavButton className="nav-secondary" view={activeView} id="settings" icon="settings" label="Administração" onNavigate={navigate} />}
               {isSuperAdmin && <NavButton className="nav-secondary" view={activeView} id="platform" icon="platform" label="Plataforma" onNavigate={navigate} />}
@@ -645,6 +749,8 @@ function App() {
 
       <main className="main">
         <OfflineBanner online={online} />
+        {updateAvailable && <UpdateBanner onReload={() => window.location.reload()} />}
+        <OperationalStatus online={online} realtimeStatus={realtimeStatus} lastSyncedAt={lastSyncedAt} />
         <button className={`sound-toggle ${notificationPermission === "granted" || soundEnabled ? "enabled" : ""}`} onClick={enableSound}>
           {notificationPermission === "granted" ? "Notificações do celular ativas" : soundEnabled ? "Fallback sonoro ativo" : "Ativar som do celular"}
         </button>
@@ -687,7 +793,7 @@ function App() {
             close={() => setSelectedCommandId(null)}
           />
         )}
-        {activeView === "cash" && !isKitchen && (
+        {activeView === "cash" && canMoney && (
           <CashPanel
             cashSession={cashSession}
             canMoney={canMoney}
@@ -699,7 +805,7 @@ function App() {
         {activeView === "queue" && canQueue && (
           <QueuePanel requests={serviceQueue} profiles={profiles} run={run} kitchenMode={isKitchen} />
         )}
-        {activeView === "products" && !isKitchen && (
+        {activeView === "products" && canAdmin && (
           <ProductsPanel
             products={products}
             categories={categories}
@@ -707,7 +813,7 @@ function App() {
             run={run}
           />
         )}
-        {activeView === "reports" && !isKitchen && canAdmin && <ReportsPanel profiles={profiles} />}
+        {activeView === "reports" && !isKitchen && canAdmin && <ReportsPanel profiles={profiles} show={show} />}
         {activeView === "settings" && !isKitchen && canAdmin && (
           <SettingsPanel
             settings={settings}
@@ -901,7 +1007,7 @@ function NavButton({ id, view, label, badge, icon, className = "", onNavigate })
 
 function MobileMenu({ view, profile, canAdmin, isSuperAdmin, isKitchen, soundActive, onNavigate, onEnableSound, onClose }) {
   const destinations = [
-    { id: "products", label: "Estoque", detail: "Produtos e quantidades", icon: "products", visible: !isKitchen },
+    { id: "products", label: "Estoque", detail: "Produtos e quantidades", icon: "products", visible: !isKitchen && canAdmin },
     { id: "reports", label: "Relatórios", detail: "Vendas e histórico", icon: "reports", visible: !isKitchen && canAdmin },
     { id: "settings", label: "Administração", detail: "Pix, visual e equipe", icon: "settings", visible: !isKitchen && canAdmin },
     { id: "platform", label: "Plataforma", detail: "Estabelecimentos", icon: "platform", visible: !isKitchen && isSuperAdmin },
@@ -958,6 +1064,29 @@ function OfflineBanner({ online }) {
   );
 }
 
+function UpdateBanner({ onReload }) {
+  return (
+    <div className="update-banner" role="status">
+      <div><strong>Nova versão disponível</strong><span>Atualize quando terminar a ação atual.</span></div>
+      <button type="button" className="neutral small" onClick={onReload}>Atualizar agora</button>
+    </div>
+  );
+}
+
+function OperationalStatus({ online, realtimeStatus, lastSyncedAt }) {
+  const meta = syncStatusMeta({ online, realtimeStatus });
+  const syncedLabel = lastSyncedAt
+    ? `Última atualização ${lastSyncedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+    : "Aguardando a primeira atualização";
+  return (
+    <div className={`operational-status ${meta.tone}`} aria-live="polite">
+      <span className="operational-dot" aria-hidden="true" />
+      <strong>{meta.label}</strong>
+      <small>{syncedLabel}</small>
+    </div>
+  );
+}
+
 function Dashboard({ data, cashSession, setView, canOrders, canMoney, canAdmin, establishmentName, queuePending }) {
   const businessDate = data?.business_date || todayISO();
   return (
@@ -966,17 +1095,17 @@ function Dashboard({ data, cashSession, setView, canOrders, canMoney, canAdmin, 
       <div className="actions-grid">
         {canOrders && <button className="primary big" onClick={() => setView("commands")}><span>Operação</span><strong>Nova comanda</strong></button>}
         {canMoney && <button className="success big" onClick={() => setView("cash")}><span>Financeiro</span><strong>Acessar caixa</strong></button>}
-        <button className="neutral big" onClick={() => setView("products")}><span>Catálogo</span><strong>Produtos e estoque</strong></button>
+        {canAdmin && <button className="neutral big" onClick={() => setView("products")}><span>Catálogo</span><strong>Produtos e estoque</strong></button>}
         {canOrders && <button className="neutral big" onClick={() => setView("queue")}><span>Atendimento</span><strong>Ver fila</strong></button>}
       </div>
       <div className="metric-grid">
-        <Metric label="Caixa" value={cashSession ? "ABERTO" : "FECHADO"} tone={cashSession ? "good" : "bad"} />
-        <Metric label="Total vendido hoje" value={currency(data?.total_vendido_hoje)} />
+        {canMoney && <Metric label="Caixa" value={cashSession ? "ABERTO" : "FECHADO"} tone={cashSession ? "good" : "bad"} />}
+        {canMoney && <Metric label="Total vendido hoje" value={currency(data?.total_vendido_hoje)} />}
         <Metric label="Comandas abertas agora" value={data?.qtd_abertas ?? 0} />
         <Metric label="Finalizadas hoje" value={data?.qtd_finalizadas_hoje ?? 0} />
-        <Metric label="Dinheiro" value={currency(data?.total_dinheiro)} />
-        <Metric label="Pix" value={currency(data?.total_pix)} />
-        <Metric label="Cartao" value={currency(data?.total_cartao)} />
+        {canMoney && <Metric label="Dinheiro" value={currency(data?.total_dinheiro)} />}
+        {canMoney && <Metric label="Pix" value={currency(data?.total_pix)} />}
+        {canMoney && <Metric label="Cartao" value={currency(data?.total_cartao)} />}
         <Metric label="Fila pendente agora" value={queuePending ?? data?.fila_pendente ?? 0} tone={queuePending ? "bad" : "good"} />
       </div>
       <div className="dashboard-period-note">
@@ -1610,7 +1739,7 @@ function PaymentModal({ command, settings, initialMode, onClose, onPaid, run }) 
   );
 }
 
-function CashPanel({ cashSession, canMoney, canAdmin, run }) {
+function CashPanel({ cashSession, canMoney, canAdmin, run, show }) {
   const [opening, setOpening] = useState("0");
   const [notes, setNotes] = useState("");
   const [summary, setSummary] = useState(null);
@@ -1619,18 +1748,24 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
   const [movementReason, setMovementReason] = useState("");
   const [counted, setCounted] = useState("");
   const [force, setForce] = useState(false);
+  const [countReviewed, setCountReviewed] = useState(false);
+  const [closeReason, setCloseReason] = useState("");
+  const cashSessionId = cashSession?.id;
 
   const loadSummary = useCallback(async () => {
-    if (!cashSession) {
+    if (!cashSessionId) {
       setSummary(null);
       return;
     }
-    const data = await unwrap(supabase.rpc("get_cash_summary", { p_cash_session_id: cashSession.id }));
+    const data = await unwrap(supabase.rpc("get_cash_summary", { p_cash_session_id: cashSessionId }));
     setSummary(data);
-    setCounted(String(data.dinheiro_esperado || 0));
-  }, [cashSession]);
+  }, [cashSessionId]);
 
   useEffect(() => {
+    setCounted("");
+    setCountReviewed(false);
+    setCloseReason("");
+    setForce(false);
     loadSummary().catch(() => undefined);
   }, [loadSummary]);
 
@@ -1670,20 +1805,42 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
   }
 
   async function closeCash() {
-    if (!window.confirm("Confirmar fechamento de caixa?")) return;
-    await run(
+    if (!counted.trim()) {
+      show("Informe o valor contado fisicamente no caixa.", "error");
+      return;
+    }
+    if (!countReviewed) {
+      setCountReviewed(true);
+      return;
+    }
+    const difference = cashDifference(parseCurrency(counted), summary.dinheiro_esperado);
+    if (cashCloseNeedsReason(difference, force) && closeReason.trim().length < 5) {
+      show("Informe uma justificativa com pelo menos 5 caracteres.", "error");
+      return;
+    }
+    if (!window.confirm(`Confirmar fechamento de caixa${difference ? ` com diferença de ${currency(difference)}` : ""}?`)) return;
+    const closed = await run(
       () =>
         unwrap(
           supabase.rpc("close_cash_session", {
             p_cash_session_id: cashSession.id,
             p_counted_amount: parseCurrency(counted),
-            p_close_notes: "",
+            p_close_notes: closeReason.trim(),
             p_force: force,
           })
         ),
       "Caixa fechado"
     );
+    if (closed !== null) {
+      setCounted("");
+      setCountReviewed(false);
+      setCloseReason("");
+    }
   }
+
+  const countedDifference = summary
+    ? cashDifference(parseCurrency(counted), summary.dinheiro_esperado)
+    : 0;
 
   return (
     <section>
@@ -1710,7 +1867,10 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
           <div className="metric-grid">
             <Metric label="Fundo inicial" value={currency(summary.opening_amount)} />
             <Metric label="Total vendido" value={currency(summary.total_vendido)} />
-            <Metric label="Dinheiro esperado" value={currency(summary.dinheiro_esperado)} />
+            <Metric
+              label={canAdmin && !countReviewed ? "Conferência do dinheiro" : "Dinheiro esperado"}
+              value={canAdmin && !countReviewed ? "Conte antes de conferir" : currency(summary.dinheiro_esperado)}
+            />
             <Metric label="Pix" value={currency(summary.por_forma?.pix)} />
             <Metric label="Cartao debito" value={currency(summary.por_forma?.debito)} />
             <Metric label="Cartao credito" value={currency(summary.por_forma?.credito)} />
@@ -1730,13 +1890,29 @@ function CashPanel({ cashSession, canMoney, canAdmin, run }) {
           )}
           {canAdmin && (
             <div className="close-box">
-              <label>Dinheiro contado</label>
-              <input value={counted} onChange={(event) => setCounted(event.target.value)} />
+              <h3>Fechamento com contagem cega</h3>
+              <p className="muted">Conte o dinheiro físico antes de revelar o valor esperado.</p>
+              <label>Dinheiro contado fisicamente</label>
+              <input
+                value={counted}
+                inputMode="decimal"
+                placeholder="0,00"
+                onChange={(event) => { setCounted(event.target.value); setCountReviewed(false); }}
+              />
+              {!countReviewed && <button type="button" className="neutral" onClick={closeCash}>Conferir contagem</button>}
+              {countReviewed && <div className={`cash-reconciliation ${countedDifference === 0 ? "balanced" : "different"}`}>
+                <span>Esperado <strong>{currency(summary.dinheiro_esperado)}</strong></span>
+                <span>Diferença <strong>{currency(countedDifference)}</strong></span>
+              </div>}
               <label className="check">
                 <input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />
                 Forcar fechamento com comandas abertas
               </label>
-              <button className="gold" onClick={closeCash}>Fechar caixa</button>
+              {countReviewed && cashCloseNeedsReason(countedDifference, force) && <>
+                <label>Justificativa obrigatória</label>
+                <textarea value={closeReason} minLength="5" onChange={(event) => setCloseReason(event.target.value)} placeholder="Explique a diferença ou o fechamento forçado" />
+              </>}
+              {countReviewed && <button className="gold" onClick={closeCash}>Fechar caixa</button>}
             </div>
           )}
         </div>
@@ -2062,107 +2238,188 @@ function ProductsPanel({ products, categories, canAdmin, run }) {
   );
 }
 
-function ReportsPanel({ profiles }) {
+function ReportsPanel({ profiles, show }) {
+  const PAGE_SIZE = 30;
+  const [section, setSection] = useState("sales");
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
   const [period, setPeriod] = useState("today");
   const [rows, setRows] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [page, setPage] = useState(0);
+  const [totalRows, setTotalRows] = useState(0);
+  const [auditRows, setAuditRows] = useState([]);
+  const [auditPage, setAuditPage] = useState(0);
+  const [auditTotal, setAuditTotal] = useState(0);
   const [loading, setLoading] = useState(false);
 
-  async function load(range = { from, to }) {
+  const rpcRange = (range) => ({ p_from: range.from || null, p_to: range.to || null });
+
+  async function loadSales(range = { from, to }, nextPage = 0) {
     setLoading(true);
     try {
-      let query = supabase
-        .from("commands")
-        .select("*, command_items(*), payments(*)")
-        .order("opened_at", { ascending: false });
-      if (range.from) query = query.gte("business_date", range.from);
-      if (range.to) query = query.lte("business_date", range.to);
-      const data = await unwrap(query);
-
-      // The dashboard uses the payment/closing date for today's totals. Add
-      // paid or cancelled commands closed in the selected period even when
-      // they were opened on the previous business date (e.g. after midnight).
-      let closedData = [];
-      if (range.from || range.to) {
-        let closedQuery = supabase
-          .from("commands")
-          .select("*, command_items(*), payments(*)")
-          .not("closed_at", "is", null)
-          .order("closed_at", { ascending: false });
-        if (range.from) closedQuery = closedQuery.gte("closed_at", businessDateStartISO(range.from));
-        if (range.to) closedQuery = closedQuery.lt("closed_at", businessDateStartISO(nextBusinessDate(range.to)));
-        closedData = await unwrap(closedQuery);
-      }
-
-      const rowsById = new Map([...(data || []), ...(closedData || [])].map((row) => [row.id, row]));
-      // Keep cancellations with items for operational history; discard empty drafts from this report.
-      setRows([...rowsById.values()].filter((row) => row.status !== "cancelada" || row.command_items?.length > 0));
+      const [summaryData, pageData] = await Promise.all([
+        unwrap(supabase.rpc("get_sales_report_summary", rpcRange(range))),
+        unwrap(supabase.rpc("get_sales_report_page", {
+          ...rpcRange(range),
+          p_limit: PAGE_SIZE,
+          p_offset: nextPage * PAGE_SIZE,
+        })),
+      ]);
+      const nextRows = Array.isArray(pageData) ? pageData : [];
+      setSummary(summaryData || {});
+      setRows(nextRows);
+      setTotalRows(Number(nextRows[0]?.total_count || summaryData?.total_commands || 0));
+      setPage(nextPage);
+    } catch (error) {
+      show(error.message || "Não foi possível carregar o relatório.", "error");
     } finally {
       setLoading(false);
     }
   }
 
+  async function loadAudit(range = { from, to }, nextPage = 0) {
+    setLoading(true);
+    try {
+      let query = supabase
+        .from("audit_logs")
+        .select("id, user_id, action, entity, entity_id, created_at", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(nextPage * PAGE_SIZE, nextPage * PAGE_SIZE + PAGE_SIZE - 1);
+      if (range.from) query = query.gte("created_at", businessDateStartISO(range.from));
+      if (range.to) query = query.lt("created_at", businessDateStartISO(nextBusinessDate(range.to)));
+      const { data, error, count } = await query;
+      if (error) throw error;
+      setAuditRows(data || []);
+      setAuditTotal(Number(count || 0));
+      setAuditPage(nextPage);
+    } catch (error) {
+      show(error.message || "Não foi possível carregar as atividades.", "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadCurrent(range = { from, to }, nextPage = 0) {
+    if (section === "audit") return loadAudit(range, nextPage);
+    return loadSales(range, nextPage);
+  }
+
   useEffect(() => {
-    load({ from: todayISO(), to: todayISO() });
+    loadSales({ from: todayISO(), to: todayISO() }, 0);
   }, []);
+
+  function switchSection(nextSection) {
+    setSection(nextSection);
+    if (nextSection === "audit") loadAudit({ from, to }, 0);
+    else loadSales({ from, to }, 0);
+  }
 
   function selectToday() {
     const date = todayISO();
     setFrom(date);
     setTo(date);
     setPeriod("today");
-    load({ from: date, to: date });
+    if (section === "audit") loadAudit({ from: date, to: date }, 0);
+    else loadSales({ from: date, to: date }, 0);
   }
 
   function selectAllHistory() {
     setFrom("");
     setTo("");
     setPeriod("all");
-    load({ from: "", to: "" });
+    if (section === "audit") loadAudit({ from: "", to: "" }, 0);
+    else loadSales({ from: "", to: "" }, 0);
   }
 
-  const paid = rows.filter((row) => row.status === "paga");
-  const total = paid.reduce((sum, row) => sum + Number(row.total || 0), 0);
-  const byPayment = paid.flatMap((row) => row.payments || []).reduce((acc, payment) => {
-    acc[payment.method] = (acc[payment.method] || 0) + Number(payment.amount || 0);
-    return acc;
-  }, {});
+  async function exportSalesCsv() {
+    setLoading(true);
+    try {
+      const exported = [];
+      const batchSize = 500;
+      for (let offset = 0; offset < totalRows; offset += batchSize) {
+        const batch = await unwrap(supabase.rpc("get_sales_report_page", {
+          ...rpcRange({ from, to }), p_limit: batchSize, p_offset: offset,
+        }));
+        exported.push(...(batch || []));
+      }
+      const escape = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+      const lines = [
+        ["Comanda", "Status", "Cliente", "Responsável", "Total", "Abertura", "Fechamento"],
+        ...exported.map((row) => [
+          row.number, COMMAND_STATUS[row.status] || row.status, row.customer_name || "",
+          commandOwner(row, profiles), Number(row.total || 0).toFixed(2), row.opened_at || "", row.closed_at || "",
+        ]),
+      ].map((line) => line.map(escape).join(";")).join("\n");
+      const url = URL.createObjectURL(new Blob([`\uFEFF${lines}`], { type: "text/csv;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `cloudpdv-vendas-${from || "inicio"}-${to || "hoje"}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      show(error.message || "Não foi possível exportar o relatório.", "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const userById = new Map(profiles.map((item) => [item.id, item.full_name || item.username]));
+  const currentPage = section === "audit" ? auditPage : page;
+  const currentTotal = section === "audit" ? auditTotal : totalRows;
+  const totalPages = Math.max(1, Math.ceil(currentTotal / PAGE_SIZE));
 
   return (
     <section>
-      <Header title="Relatórios" subtitle="Vendas e pagamentos por período" />
+      <Header title="Relatórios" subtitle="Vendas, pagamentos e atividades administrativas" />
+      <nav className="report-tabs" aria-label="Tipos de relatório">
+        <button type="button" className={section === "sales" ? "active" : ""} onClick={() => switchSection("sales")}>Vendas</button>
+        <button type="button" className={section === "audit" ? "active" : ""} onClick={() => switchSection("audit")}>Atividades</button>
+      </nav>
       <div className="panel report-toolbar">
         <div className="quick-form">
           <div><label>De</label><input type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPeriod("custom"); }} /></div>
           <div><label>Até</label><input type="date" value={to} onChange={(event) => { setTo(event.target.value); setPeriod("custom"); }} /></div>
-          <button className="primary" onClick={() => load({ from, to })}>{loading ? "Carregando..." : "Filtrar período"}</button>
+          <button className="primary" onClick={() => loadCurrent({ from, to }, 0)}>{loading ? "Carregando..." : "Filtrar período"}</button>
           <button className="neutral" onClick={selectToday}>Hoje</button>
           <button className="neutral" onClick={selectAllHistory}>Histórico completo</button>
+          {section === "sales" && <button className="neutral" disabled={loading || !totalRows} onClick={exportSalesCsv}>Exportar CSV</button>}
         </div>
         <p className="report-period">{period === "all" ? "Exibindo todo o histórico disponível" : period === "today" ? `Exibindo ${businessDateLabel(todayISO())}` : "Exibindo o período selecionado"}</p>
       </div>
-      <div className="metric-grid">
-        <Metric label="Total vendido" value={currency(total)} />
-        <Metric label="Comandas pagas" value={paid.length} />
-        <Metric label="Canceladas" value={rows.filter((row) => row.status === "cancelada").length} />
-        <Metric label="Dinheiro" value={currency(byPayment.dinheiro)} />
-        <Metric label="Pix" value={currency(byPayment.pix)} />
-        <Metric label="Debito" value={currency(byPayment.debito)} />
-        <Metric label="Credito" value={currency(byPayment.credito)} />
-      </div>
-      <div className="table-list">
-        {rows.map((row) => (
-          <div className="table-row" key={row.id}>
+
+      {section === "sales" ? <>
+        <div className="metric-grid">
+          <Metric label="Total vendido" value={currency(summary.total_sold)} />
+          <Metric label="Comandas pagas" value={summary.paid_count || 0} />
+          <Metric label="Canceladas" value={summary.cancelled_count || 0} />
+          <Metric label="Dinheiro" value={currency(summary.cash_total)} />
+          <Metric label="Pix" value={currency(summary.pix_total)} />
+          <Metric label="Débito" value={currency(summary.debit_total)} />
+          <Metric label="Crédito" value={currency(summary.credit_total)} />
+        </div>
+        <div className="table-list">
+          {rows.map((row) => <div className="table-row" key={row.id}>
             <strong>#{String(row.number).padStart(4, "0")}</strong>
-            <span>{COMMAND_STATUS[row.status]}</span>
-            <span>{row.customer_name || "-"}</span>
-            <span>{commandOwner(row, profiles)}</span>
-            <span>{currency(row.total)}</span>
-            <span>{dateTime(row.opened_at)}</span>
-          </div>
-        ))}
-      </div>
+            <span>{COMMAND_STATUS[row.status]}</span><span>{row.customer_name || "-"}</span>
+            <span>{commandOwner(row, profiles)}</span><span>{currency(row.total)}</span><span>{dateTime(row.opened_at)}</span>
+          </div>)}
+          {!rows.length && !loading && <div className="empty">Nenhuma movimentação neste período.</div>}
+        </div>
+      </> : <div className="audit-list">
+        {auditRows.map((item) => <article className="audit-row" key={item.id}>
+          <span className="audit-dot" aria-hidden="true" />
+          <div><strong>{auditActionLabel(item.action)}</strong><small>{item.entity} · {userById.get(item.user_id) || "Sistema"}</small></div>
+          <time>{dateTime(item.created_at)}</time>
+        </article>)}
+        {!auditRows.length && !loading && <div className="empty">Nenhuma atividade registrada neste período.</div>}
+      </div>}
+
+      {currentTotal > PAGE_SIZE && <div className="pagination" aria-label="Paginação do relatório">
+        <button className="neutral" disabled={loading || currentPage === 0} onClick={() => loadCurrent({ from, to }, currentPage - 1)}>Anterior</button>
+        <span>Página {currentPage + 1} de {totalPages} · {currentTotal} registro(s)</span>
+        <button className="neutral" disabled={loading || currentPage + 1 >= totalPages} onClick={() => loadCurrent({ from, to }, currentPage + 1)}>Próxima</button>
+      </div>}
     </section>
   );
 }
